@@ -15,6 +15,7 @@
 from __future__ import with_statement
 
 from datetime import datetime
+from mimetypes import guess_type
 import os
 import sys
 
@@ -590,7 +591,7 @@ class GitNode(Node):
         if self.isdir:
             return None
 
-        return ''
+        return guess_type(self.path)[0]
 
     def get_content_length(self):
         if not self.isfile:
