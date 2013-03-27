@@ -22,4 +22,4 @@ trac/htdocs/js/messages/*.js
 .project
 .pydevproject
 .settings
-Genshi-0.7-py2.7-linux-x86_64.egg/
+/*.egg/
