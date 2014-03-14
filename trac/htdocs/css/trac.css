@@ -82,6 +82,8 @@ span:target {
 
 /* Forms */
 input, textarea, select { margin: 2px }
+/* Avoid to inherit white-space of its parent element for IE 11, #11376 */
+textarea { white-space: pre-wrap }
 input, select { vertical-align: middle }
 input[type=button], input[type=submit], input[type=reset], button {
  *overflow: visible; /* Workaround too much margin on button in IE7 */
@@ -133,6 +135,7 @@ fieldset {
 p.hint, span.hint { color: #666; font-size: 85%; font-style: italic; margin: .5em 0;
   padding-left: 1em;
 }
+p.help { color: #666; font-size: 90%; margin: 1em .5em .5em; }
 legend {
  color: #999;
  margin-left: .6em;
@@ -225,6 +228,26 @@ input[type=submit].trac-delete:hover {
 #metanav {
  padding-top: .3em;
 }
+#metanav form.trac-logout {
+ display: inline;
+ margin: 0;
+ padding: 0;
+}
+#metanav form.trac-logout button {
+ margin: 0;
+ padding: 0;
+ border: 0;
+ outline: 0;
+ background: transparent;
+ font-family: inherit;
+ font-size: inherit;
+ color: #b00;
+ border-bottom: 1px dotted #bbb;
+ cursor: pointer;
+}
+#metanav form.trac-logout button::-moz-focus-inner { border: 0; padding: 0 }
+#metanav form.trac-logout button:hover { background-color: #eee; color: #555 }
+#metanav form.trac-logout button:active { position: static }
 
 /* Main navigation bar */
 #mainnav {
@@ -311,7 +334,7 @@ input[type=submit].trac-delete:hover {
  text-align: center;
 }
 #altlinks h3 { font-size: 12px; letter-spacing: normal; margin: 0 }
-#altlinks ul { list-style: none; margin: 0; }
+#altlinks ul { list-style: none; margin: 0; padding: 0 }
 #altlinks li {
  border-right: 1px solid #d7d7d7;
  display: inline;
@@ -506,7 +529,11 @@ pre.wiki, pre.literal-block {
  overflow: auto;
 }
 
-tt {
+div.wiki-code {
+ margin: 1em 1.75em;
+}
+
+code, tt {
  color: #600;
  border: 1px solid #edc;
  border-radius: .25em;
@@ -537,6 +564,8 @@ table.wiki th {
  padding: .1em .25em;
  background-color: #f7f7f7;
 }
+table.wiki tbody tr.even { background-color: #fcfcfc }
+table.wiki tbody tr.odd { background-color: #f7f7f7 }
 
 .wikitoolbar {
  margin-top: 0.3em;
@@ -608,6 +637,7 @@ div.trac-grip {
  float: right;
  margin: .4em 0;
 }
+#attachments span.trac-author { font-style: italic; }
 
 /* Styles for tabular listings such as those used for displaying directory
    contents and report results. */

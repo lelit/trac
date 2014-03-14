@@ -27,8 +27,9 @@ from genshi.builder import tag
 from trac.core import *
 from trac.prefs.api import IPreferencePanelProvider
 from trac.util.datefmt import all_timezones, get_timezone, localtz
-from trac.util.translation import _, get_available_locales
-from trac.web import HTTPNotFound, IRequestHandler
+from trac.util.translation import _, deactivate, get_available_locales, \
+                                  make_activable
+from trac.web.api import HTTPNotFound, IRequestHandler
 from trac.web.chrome import add_notice, add_stylesheet, \
                             INavigationContributor, ITemplateProvider
 
@@ -68,7 +69,7 @@ class PreferencesModule(Component):
         if xhr and req.method == 'POST' and 'save_prefs' in req.args:
             self._do_save_xhr(req)
 
-        panel_id = req.args['panel_id']
+        panel_id = req.args.get('panel_id')
 
         panels = []
         chosen_provider = None
@@ -95,7 +96,7 @@ class PreferencesModule(Component):
         yield ('datetime', _('Date & Time'))
         yield ('keybindings', _('Keyboard Shortcuts'))
         yield ('userinterface', _('User Interface'))
-        if Locale:
+        if Locale or 'TRAC_ADMIN' in req.perm:
             yield ('language', _('Language'))
         if not req.authname or req.authname == 'anonymous':
             yield ('advanced', _('Advanced'))
@@ -111,16 +112,22 @@ class PreferencesModule(Component):
         data = {
             'settings': {'session': req.session, 'session_id': req.session.sid},
             'timezones': all_timezones, 'timezone': get_timezone,
-            'localtz': localtz
+            'localtz': localtz,
+            'has_babel': False
         }
 
         if Locale:
-            locales = [Locale.parse(locale)
-                       for locale in get_available_locales()]
-            languages = sorted((str(locale), locale.display_name)
-                               for locale in locales)
+            locale_ids = get_available_locales()
+            locales = [Locale.parse(locale) for locale in locale_ids]
+            # use locale identifiers from get_available_locales() instead
+            # of str(locale) to prevent storing expanded locale identifier
+            # to session, e.g. zh_Hans_CN and zh_Hant_TW, since Babel 1.0.
+            # see #11258.
+            languages = sorted((id, locale.display_name)
+                               for id, locale in zip(locale_ids, locales))
             data['locales'] = locales
             data['languages'] = languages
+            data['has_babel'] = True
 
         return 'prefs_%s.html' % (panel or 'general'), data
 
@@ -142,6 +149,7 @@ class PreferencesModule(Component):
         req.send_no_content()
 
     def _do_save(self, req):
+        language = req.session.get('language')
         for field in self._form_fields:
             val = req.args.get(field, '').strip()
             if val:
@@ -157,6 +165,11 @@ class PreferencesModule(Component):
             elif field in req.session and (field in req.args or
                                            field + '_cb' in req.args):
                 del req.session[field]
+        if Locale and req.session.get('language') != language:
+            # reactivate translations with new language setting when changed
+            del req.locale  # for re-negotiating locale
+            deactivate()
+            make_activable(lambda: req.locale, self.env.path)
         add_notice(req, _('Your preferences have been saved.'))
 
     def _do_load(self, req):

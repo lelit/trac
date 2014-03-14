@@ -11,7 +11,7 @@
   </head>
 
   <body py:with="sorted_repos = sorted(repositories.iteritems(), key=lambda item: item[0].lower())">
-    <h2>Manage Repositories</h2>
+    <h2>Manage Repositories <span py:if="view == 'list'" class="trac-count">(${len(repositories)})</span></h2>
 
     <py:def function="type_field(editable, multiline=False, selected=None)">
       <div class="field">
@@ -47,7 +47,8 @@
             and cannot be edited on this page.
           </p>
           <div class="field">
-            <label>Name:<br/><input type="text" name="name" value="$info.name" readonly="$readonly"/></label>
+            <label>Name:<br/><input type="text" name="name" class="trac-autofocus"
+                                    value="$info.name" readonly="$readonly" /></label>
           </div>
           <py:choose>
             <py:when test="'alias' in info">
@@ -81,8 +82,8 @@ $info.description</textarea>
             </fieldset>
           </div>
           <div class="buttons">
+            <input py:if="info.editable" type="submit" name="save" class="trac-disable-on-submit" value="${_('Save')}"/>
             <input type="submit" name="cancel" value="${_('Cancel')}"/>
-            <input py:if="info.editable" type="submit" name="save" value="${_('Save')}"/>
           </div>
         </fieldset>
       </form>
@@ -99,7 +100,7 @@ $info.description</textarea>
               <label>Directory: <input type="text" name="dir"/></label>
             </div>
             <div class="buttons">
-              <input type="submit" name="add_repos" value="${_('Add')}"/>
+              <input type="submit" name="add_repos" class="trac-disable-on-submit" value="${_('Add')}"/>
             </div>
           </fieldset>
         </form>
@@ -113,12 +114,12 @@ $info.description</textarea>
             </div>
             ${alias_field(True)}
             <div class="buttons">
-              <input type="submit" name="add_alias" value="${_('Add')}"/>
+              <input type="submit" name="add_alias" class="trac-disable-on-submit" value="${_('Add')}"/>
             </div>
           </fieldset>
         </form>
 
-        <form id="trac-repository_table" method="post" action="">
+        <form py:if="sorted_repos" id="trac-repository_table" method="post" action="">
           <table class="listing" id="trac-reposlist">
             <thead>
               <tr><th class="sel">&nbsp;</th>
@@ -127,7 +128,10 @@ $info.description</textarea>
             </thead>
             <tbody>
               <tr py:for="(reponame, info) in sorted_repos">
-                <td class="sel"><input py:if="info.editable" type="checkbox" name="sel" value="$info.name"/></td>
+                <td class="sel">
+                  <input py:if="info.editable" type="checkbox" class="trac-disable-determinant"
+                         name="sel" value="$info.name"/>
+                </td>
                 <td class="name">
                   <a href="${panel_href(info.name or '(default)')}">${info.name or _('(default)')}</a>
                 </td>
@@ -142,7 +146,7 @@ $info.description</textarea>
           </table>
           <div class="buttons">
             <input type="submit" name="refresh" value="${_('Refresh')}"/>
-            <input type="submit" name="remove" value="${_('Remove selected items')}"/>
+            <input type="submit" name="remove" class="trac-disable trac-disable-on-submit" value="${_('Remove selected items')}"/>
           </div>
         </form>
       </py:otherwise>

@@ -1,4 +1,15 @@
 # -*- coding: utf-8 -*-
+#
+# Copyright (C) 2005-2013 Edgewall Software
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://trac.edgewall.org/wiki/TracLicense.
+#
+# This software consists of voluntary contributions made by many
+# individuals. For the exact contribution history, see the revision
+# history and logs, available at http://trac.edgewall.org/log/.
 
 from __future__ import with_statement
 
@@ -28,7 +39,8 @@ class Error(Exception):
 
 
 def make_env(get_cnx):
-    return Mock(components={DatabaseManager:
+    from trac.core import ComponentManager
+    return Mock(ComponentManager, components={DatabaseManager:
              Mock(get_connection=get_cnx,
                   _transaction_local=ThreadLocal(wdb=None, rdb=None))})
 
@@ -344,10 +356,10 @@ class ConnectionTestCase(unittest.TestCase):
 
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(ParseConnectionStringTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(StringsTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(ConnectionTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(WithTransactionTest, 'test'))
+    suite.addTest(unittest.makeSuite(ParseConnectionStringTestCase))
+    suite.addTest(unittest.makeSuite(StringsTestCase))
+    suite.addTest(unittest.makeSuite(ConnectionTestCase))
+    suite.addTest(unittest.makeSuite(WithTransactionTest))
     return suite
 
 

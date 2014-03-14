@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2009 Edgewall Software
+# Copyright (C) 2006-2013 Edgewall Software
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -21,7 +21,8 @@ import tempfile
 import unittest
 
 from trac import util
-from trac.util.tests import concurrency, datefmt, presentation, text, html
+from trac.util.tests import concurrency, datefmt, presentation, text, \
+                            translation, html
 
 
 class AtomicFileTestCase(unittest.TestCase):
@@ -38,7 +39,7 @@ class AtomicFileTestCase(unittest.TestCase):
     def test_non_existing(self):
         with util.AtomicFile(self.path) as f:
             f.write('test content')
-        self.assertEqual(True, f.closed)
+        self.assertTrue(f.closed)
         self.assertEqual('test content', util.read_file(self.path))
 
     def test_existing(self):
@@ -46,7 +47,7 @@ class AtomicFileTestCase(unittest.TestCase):
         self.assertEqual('Some content', util.read_file(self.path))
         with util.AtomicFile(self.path) as f:
             f.write('Some new content')
-        self.assertEqual(True, f.closed)
+        self.assertTrue(f.closed)
         self.assertEqual('Some new content', util.read_file(self.path))
 
     if util.can_rename_open_file:
@@ -56,8 +57,8 @@ class AtomicFileTestCase(unittest.TestCase):
             with open(self.path) as rf:
                 with util.AtomicFile(self.path) as f:
                     f.write('Replaced content')
-            self.assertEqual(True, rf.closed)
-            self.assertEqual(True, f.closed)
+            self.assertTrue(rf.closed)
+            self.assertTrue(f.closed)
             self.assertEqual('Replaced content', util.read_file(self.path))
 
     # FIXME: It is currently not possible to make this test pass on all
@@ -70,18 +71,18 @@ class AtomicFileTestCase(unittest.TestCase):
         self.path = os.path.join(tempfile.gettempdir(), u'träc-témpfilè')
         with util.AtomicFile(self.path) as f:
             f.write('test content')
-        self.assertEqual(True, f.closed)
+        self.assertTrue(f.closed)
         self.assertEqual('test content', util.read_file(self.path))
 
 
 class PathTestCase(unittest.TestCase):
 
     def assert_below(self, path, parent):
-        self.assert_(util.is_path_below(path.replace('/', os.sep),
-                                        parent.replace('/', os.sep)))
+        self.assertTrue(util.is_path_below(path.replace('/', os.sep),
+                                           parent.replace('/', os.sep)))
 
     def assert_not_below(self, path, parent):
-        self.assert_(not util.is_path_below(path.replace('/', os.sep),
+        self.assertFalse(util.is_path_below(path.replace('/', os.sep),
                                             parent.replace('/', os.sep)))
 
     def test_is_path_below(self):
@@ -93,8 +94,8 @@ class PathTestCase(unittest.TestCase):
         self.assert_not_below('/svn/project2/sub/repos', '/svn/project1')
         self.assert_not_below('/svn/project1/../project2/repos',
                               '/svn/project1')
-        self.assert_(util.is_path_below('repos', os.path.join(os.getcwd())))
-        self.assert_(not util.is_path_below('../sub/repos',
+        self.assertTrue(util.is_path_below('repos', os.path.join(os.getcwd())))
+        self.assertFalse(util.is_path_below('../sub/repos',
                                             os.path.join(os.getcwd())))
 
 
@@ -171,16 +172,17 @@ class SafeReprTestCase(unittest.TestCase):
 
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(AtomicFileTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(PathTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(RandomTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(ContentDispositionTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(SafeReprTestCase, 'test'))
+    suite.addTest(unittest.makeSuite(AtomicFileTestCase))
+    suite.addTest(unittest.makeSuite(PathTestCase))
+    suite.addTest(unittest.makeSuite(RandomTestCase))
+    suite.addTest(unittest.makeSuite(ContentDispositionTestCase))
+    suite.addTest(unittest.makeSuite(SafeReprTestCase))
     suite.addTest(concurrency.suite())
     suite.addTest(datefmt.suite())
     suite.addTest(presentation.suite())
     suite.addTest(doctest.DocTestSuite(util))
     suite.addTest(text.suite())
+    suite.addTest(translation.suite())
     suite.addTest(html.suite())
     return suite
 

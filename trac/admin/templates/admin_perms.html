@@ -13,26 +13,46 @@
   <body>
     <h2>Manage Permissions and Groups</h2>
 
-    <py:if test="'PERMISSION_GRANT' in perm">
+    <py:if test="'PERMISSION_GRANT' in perm('admin', 'general/perm')">
       <form id="addperm" class="addnew" method="post" action="">
         <fieldset>
           <legend>Grant Permission:</legend>
           <div class="field">
-            <label>Subject: <input id="gp_subject" type="text" name="subject" /></label>
-          </div>
-          <div class="field">
             <label>Action:
-              <select id="action" name="action">
-                <option py:for="action in sorted(actions)">$action</option>
+              <select id="action" name="action"
+                      py:with="allowed_actions = [a for a in actions if a in perm]">
+                <option py:for="action in sorted(allowed_actions)">$action</option>
               </select>
             </label>
           </div>
+          <div class="field">
+            <label>Subject: <input id="gp_subject" type="text" name="subject" /></label>
+          </div>
           <div class="buttons">
-            <input type="submit" name="add" value="${_('Add')}" />
+            <input type="submit" name="add" class="trac-disable-on-submit" value="${_('Add')}" />
           </div>
           <p class="help">
             Grant permission for an action to a subject, which can be either a user
             or a group.
+          </p>
+        </fieldset>
+      </form>
+
+      <form id="copyperm" class="addnew" method="post" action="">
+        <fieldset>
+          <legend>Copy Permissions:</legend>
+          <div class="field">
+            <label>Subject: <input id="cp_subject" type="text" name="subject" /></label>
+          </div>
+          <div class="field">
+            <label>Target: <input id="cp_target" type="text" name="target" /></label>
+          </div>
+          <div class="buttons">
+            <input type="submit" name="copy" value="${_('Add')}"/>
+          </div>
+          <p class="help">
+            Copy all of subject's permissions to target.
+            Subject and target can be either users or groups.
           </p>
         </fieldset>
       </form>
@@ -47,7 +67,7 @@
             <label>Group: <input id="sg_group" type="text" name="group" /></label>
           </div>
           <div class="buttons">
-            <input type="submit" name="add" value="${_('Add')}"/>
+            <input type="submit" name="add" class="trac-disable-on-submit" value="${_('Add')}"/>
           </div>
           <p class="help">
             Add a user or group to an existing permission group.
@@ -56,7 +76,7 @@
       </form>
     </py:if>
 
-    <form id="revokeform" method="post" action="" py:with="can_revoke = 'PERMISSION_REVOKE' in perm">
+    <form id="revokeform" method="post" action="" py:with="can_revoke = 'PERMISSION_REVOKE' in perm('admin', 'general/perm')">
       <h3>Permissions</h3>
       <table class="listing" id="permlist">
         <thead>
@@ -67,14 +87,19 @@
               class="${'odd' if idx % 2 else 'even'}">
             <td>$subject</td>
             <td>
-              <label py:for="subject, action in perm_group">
+              <label py:for="subject, action in perm_group"
+                     py:with="invalid = action not in actions; has_perm = action in perm">
                 <!--! base64 makes it safe to use ':' as separator when passing
                       both subject and action as one query parameter -->
                 <input py:if="can_revoke" type="checkbox" name="sel"
+                       class="trac-disable-determinant"
+                       title="${_('You don\'t have permission to revoke this action')
+                                if not has_perm else None}"
                        value="${'%s:%s' % (unicode_to_base64(subject),
-                                           unicode_to_base64(action))}"/>
-                <span py:strip="action in actions" class="missing"
-                      title="Action is no longer defined">${action}</span>
+                                           unicode_to_base64(action))}"
+                       disabled="${'disabled' if not has_perm else None}" />
+                <span class="${classes(missing=invalid)}"
+                      title="${_('%(action)s is no longer defined', action=action) if invalid else action}">${action}</span>
               </label>
             </td>
           </tr>
@@ -97,6 +122,7 @@
                 <!--! base64 makes it safe to use ':' as separator when passing
                       both subject and action as one query parameter -->
                 <input py:if="can_revoke" type="checkbox" name="sel"
+                       class="trac-disable-determinant"
                        value="${'%s:%s' % (unicode_to_base64(subject),
                                            unicode_to_base64(action))}"/> $subject
               </label>
@@ -106,7 +132,7 @@
         </tbody>
       </table>
       <div class="buttons" py:if="can_revoke">
-        <input type="submit" name="remove" value="${_('Remove selected items')}" />
+        <input type="submit" name="remove" class="trac-disable" value="${_('Remove selected items')}" />
       </div>
     </form>
 

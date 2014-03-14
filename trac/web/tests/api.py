@@ -1,4 +1,15 @@
 # -*- coding: utf-8 -*-
+#
+# Copyright (C) 2005-2013 Edgewall Software
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://trac.edgewall.org/wiki/TracLicense.
+#
+# This software consists of voluntary contributions made by many
+# individuals. For the exact contribution history, see the revision
+# history and logs, available at http://trac.edgewall.org/log/.
 
 from trac.test import Mock
 from trac.web.api import Request, RequestDone, parse_arg_list
@@ -97,10 +108,6 @@ class RequestTestCase(unittest.TestCase):
         def start_response(status, headers):
             return write
         environ = self._make_environ(method='HEAD')
-        req = Request(environ, start_response)
-        req.send_header('Content-Type', 'text/plain;charset=utf-8')
-        # we didn't set Content-Length, so we get a RuntimeError for that
-        self.assertRaises(RuntimeError, req.write, u'Föö')
 
         req = Request(environ, start_response)
         req.send_header('Content-Type', 'text/plain;charset=utf-8')
@@ -157,6 +164,16 @@ class ParseArgListTestCase(unittest.TestCase):
         self.assertTrue(unicode, type(args[1][0]))
         self.assertEqual(u'résumé', args[1][0])
 
+    def test_qs_str_with_prefix(self):
+        """The leading `?` should be stripped from the query string."""
+        args = parse_arg_list('?k%C3%A9y=resum%C3%A9&r%C3%A9sum%C3%A9')
+        self.assertTrue(unicode, type(args[0][0]))
+        self.assertTrue(unicode, type(args[0][1]))
+        self.assertEqual(u'kéy', args[0][0])
+        self.assertEqual(u'resumé', args[0][1])
+        self.assertTrue(unicode, type(args[1][0]))
+        self.assertEqual(u'résumé', args[1][0])
+
     def test_qs_unicode(self):
         args = parse_arg_list(u'ké%3Dy=re%26su=mé&résu%26mé')
         self.assertTrue(unicode, type(args[0][0]))
@@ -169,9 +186,10 @@ class ParseArgListTestCase(unittest.TestCase):
 
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(RequestTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(ParseArgListTestCase, 'test'))
+    suite.addTest(unittest.makeSuite(RequestTestCase))
+    suite.addTest(unittest.makeSuite(ParseArgListTestCase))
     return suite
 
+
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(defaultTest='suite')

@@ -23,6 +23,7 @@ from hashlib import md5
 import new
 import mimetypes
 import os
+import re
 import socket
 from StringIO import StringIO
 import sys
@@ -35,6 +36,7 @@ from trac.util.text import empty, to_unicode
 from trac.util.translation import _
 from trac.web.href import Href
 from trac.web.wsgi import _FileWrapper
+
 
 class IAuthenticator(Interface):
     """Extension point interface for components that can provide the name
@@ -63,6 +65,11 @@ class IRequestHandler(Interface):
         simply send the response itself and not return anything.
 
         :Since 1.0: Clearsilver templates are no longer supported.
+
+        :Since 1.1.2: the rendering `method` (xml, xhtml or text) may be
+           returned as a fourth parameter in the tuple, but if not specified
+           it will be inferred from the `content_type` when rendering the
+           template.
         """
 
 
@@ -78,7 +85,7 @@ class IRequestFilter(Interface):
         Always returns the request handler, even if unchanged.
         """
 
-    def post_process_request(req, template, data, content_type):
+    def post_process_request(req, template, data, content_type, method=None):
         """Do any post-processing the request might need; typically adding
         values to the template `data` dictionary, or changing the Genshi
         template or mime type.
@@ -99,6 +106,11 @@ class IRequestFilter(Interface):
            templates.
 
         :Since 1.0: Clearsilver templates are no longer supported.
+
+        :Since 1.1.2: the rendering `method` will be passed if it is returned
+           by the request handler, otherwise `method` will be `None`. For
+           backward compatibility, the parameter is optional in the
+           implementation's signature.
         """
 
 
@@ -205,10 +217,13 @@ class _RequestArgs(dict):
 
 
 def parse_arg_list(query_string):
-    """Parse a query string into a list of `(name, value)` tuples."""
+    """Parse a query string into a list of `(name, value)` tuples.
+
+    :Since 1.1.2: a leading `?` is stripped from `query_string`."""
     args = []
     if not query_string:
         return args
+    query_string = query_string.lstrip('?')
     for arg in query_string.split('&'):
         nv = arg.split('=', 1)
         if len(nv) == 2:
@@ -243,6 +258,10 @@ class RequestDone(Exception):
     """Marker exception that indicates whether request processing has completed
     and a response was sent.
     """
+    iterable = None
+
+    def __init__(self, iterable=None):
+        self.iterable = iterable
 
 
 class Cookie(SimpleCookie):
@@ -407,11 +426,12 @@ class Request(object):
         `value` must either be an `unicode` string or can be converted to one
         (e.g. numbers, ...)
         """
-        if name.lower() == 'content-type':
+        lower_name = name.lower()
+        if lower_name == 'content-type':
             ctpos = value.find('charset=')
             if ctpos >= 0:
                 self._outcharset = value[ctpos + 8:].strip()
-        elif name.lower() == 'content-length':
+        elif lower_name == 'content-length':
             self._content_length = int(value)
         self._outheaders.append((name, unicode(value).encode('utf-8')))
 
@@ -444,7 +464,7 @@ class Request(object):
             extra = m.hexdigest()
         etag = 'W/"%s/%s/%s"' % (self.authname, http_date(datetime), extra)
         inm = self.get_header('If-None-Match')
-        if (not inm or inm != etag):
+        if not inm or inm != etag:
             self.send_header('ETag', etag)
         else:
             self.send_response(304)
@@ -474,10 +494,12 @@ class Request(object):
             scheme, host = urlparse.urlparse(self.base_url)[:2]
             url = urlparse.urlunparse((scheme, host, url, None, None, None))
 
-        # Workaround #10382, IE6+ bug when post and redirect with hash
-        if status == 303 and '#' in url and \
-                ' MSIE ' in self.environ.get('HTTP_USER_AGENT', ''):
-            url = url.replace('#', '#__msie303:')
+        # Workaround #10382, IE6-IE9 bug when post and redirect with hash
+        if status == 303 and '#' in url:
+            match = re.search(' MSIE ([0-9]+)',
+                              self.environ.get('HTTP_USER_AGENT', ''))
+            if match and int(match.group(1)) < 10:
+                url = url.replace('#', '#__msie303:')
 
         self.send_header('Location', url)
         self.send_header('Content-Type', 'text/plain')
@@ -505,7 +527,8 @@ class Request(object):
         try:
             if template.endswith('.html'):
                 if env:
-                    from trac.web.chrome import Chrome
+                    from trac.web.chrome import Chrome, add_stylesheet
+                    add_stylesheet(self, 'common/css/code.css')
                     try:
                         data = Chrome(env).render_template(self, template,
                                                            data, 'text/html')
@@ -603,25 +626,29 @@ class Request(object):
     def write(self, data):
         """Write the given data to the response body.
 
-        `data` *must* be a `str` string, encoded with the charset
-        which has been specified in the ''Content-Type'' header
-        or 'utf-8' otherwise.
+        *data* **must** be a `str` string, encoded with the charset
+        which has been specified in the ``'Content-Type'`` header
+        or UTF-8 otherwise.
 
-        Note that the ''Content-Length'' header must have been specified.
-        Its value either corresponds to the length of `data`, or, if there
-        are multiple calls to `write`, to the cumulated length of the `data`
-        arguments.
+        Note that when the ``'Content-Length'`` header is specified,
+        its value either corresponds to the length of *data*, or, if
+        there are multiple calls to `write`, to the cumulative length
+        of the *data* arguments.
         """
         if not self._write:
             self.end_headers()
-        if not hasattr(self, '_content_length'):
-            raise RuntimeError("No Content-Length header set")
         if isinstance(data, unicode):
             raise ValueError("Can't send unicode content")
         try:
             self._write(data)
         except (IOError, socket.error), e:
             if e.args[0] in (errno.EPIPE, errno.ECONNRESET, 10053, 10054):
+                raise RequestDone
+            # Note that mod_wsgi raises an IOError with only a message
+            # if the client disconnects
+            if 'mod_wsgi.version' in self.environ and \
+               e.args[0] in ('failed to write data',
+                             'client connection closed'):
                 raise RequestDone
             raise
 
@@ -702,7 +729,7 @@ class Request(object):
             # server name and port
             default_port = {'http': 80, 'https': 443}
             if self.server_port and self.server_port != \
-                   default_port[self.scheme]:
+                    default_port[self.scheme]:
                 host = '%s:%d' % (self.server_name, self.server_port)
             else:
                 host = self.server_name

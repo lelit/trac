@@ -26,7 +26,8 @@ from urlparse import urlsplit
 from trac import db_default
 from trac.admin import AdminCommandError, IAdminCommandProvider
 from trac.cache import CacheManager
-from trac.config import *
+from trac.config import BoolOption, ConfigSection, Configuration, Option, \
+                        PathOption
 from trac.core import Component, ComponentManager, implements, Interface, \
                       ExtensionPoint, TracError
 from trac.db.api import (DatabaseManager, QueryContextManager,
@@ -275,7 +276,6 @@ class Environment(Component, ComponentManager):
 
         self.path = path
         self.systeminfo = []
-        self._href = self._abs_href = None
 
         if create:
             self.create(options)
@@ -326,17 +326,14 @@ class Environment(Component, ComponentManager):
             name = name_or_class.__module__ + '.' + name_or_class.__name__
         return name.lower()
 
-    @property
+    @lazy
     def _component_rules(self):
-        try:
-            return self._rules
-        except AttributeError:
-            self._rules = {}
-            for name, value in self.components_section.options():
-                if name.endswith('.*'):
-                    name = name[:-2]
-                self._rules[name.lower()] = value.lower() in ('enabled', 'on')
-            return self._rules
+        _rules = {}
+        for name, value in self.components_section.options():
+            if name.endswith('.*'):
+                name = name[:-2]
+            _rules[name.lower()] = value.lower() in ('enabled', 'on')
+        return _rules
 
     def is_component_enabled(self, cls):
         """Implemented to only allow activation of components that are
@@ -373,8 +370,10 @@ class Environment(Component, ComponentManager):
                 break
             cname = cname[:idx]
 
-        # By default, all components in the trac package are enabled
-        return component_name.startswith('trac.') or None
+        # By default, all components in the trac package except
+        # trac.test are enabled
+        return component_name.startswith('trac.') and \
+               not component_name.startswith('trac.test.') or None
 
     def enable_component(self, cls):
         """Enable a component or module."""
@@ -715,24 +714,21 @@ class Environment(Component, ComponentManager):
             DatabaseManager(self).shutdown()
         return True
 
-    @property
+    @lazy
     def href(self):
         """The application root path"""
-        if not self._href:
-            self._href = Href(urlsplit(self.abs_href.base)[2])
-        return self._href
+        return Href(urlsplit(self.abs_href.base).path)
 
-    @property
+    @lazy
     def abs_href(self):
         """The application URL"""
-        if not self._abs_href:
-            if not self.base_url:
-                self.log.warn("base_url option not set in configuration, "
-                              "generated links may be incorrect")
-                self._abs_href = Href('')
-            else:
-                self._abs_href = Href(self.base_url)
-        return self._abs_href
+        if not self.base_url:
+            self.log.warn("base_url option not set in configuration, "
+                          "generated links may be incorrect")
+            _abs_href = Href('')
+        else:
+            _abs_href = Href(self.base_url)
+        return _abs_href
 
 
 class EnvironmentSetup(Component):
@@ -754,7 +750,7 @@ class EnvironmentSetup(Component):
         self._update_sample_config()
 
     def environment_needs_upgrade(self, db):
-        dbver = self.env.get_version(db)
+        dbver = self.env.get_version()
         if dbver == db_default.db_version:
             return False
         elif dbver > db_default.db_version:
@@ -792,9 +788,8 @@ class EnvironmentSetup(Component):
         if not os.path.isfile(filename):
             return
         config = Configuration(filename)
-        for section, default_options in config.defaults().iteritems():
-            for name, value in default_options.iteritems():
-                config.set(section, name, value)
+        for (section, name), option in Option.get_registry().iteritems():
+            config.set(section, name, option.dumps(option.default))
         try:
             config.save()
             self.log.info("Wrote sample configuration file with the new "

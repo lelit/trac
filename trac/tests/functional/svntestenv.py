@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2003-2013 Edgewall Software
+# Copyright (C) 2009-2014 Edgewall Software
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -16,8 +16,8 @@ import re
 from subprocess import call
 
 from testenv import FunctionalTestEnvironment
-from trac.tests.functional.compat import close_fds
-from trac.tests.functional import logfile
+from trac.util.compat import close_fds
+
 
 class SvnFunctionalTestEnvironment(FunctionalTestEnvironment):
     def work_dir(self):
@@ -31,14 +31,17 @@ class SvnFunctionalTestEnvironment(FunctionalTestEnvironment):
         Initialize a repo of the type :attr:`self.repotype`.
         """
         if call(["svnadmin", "create", self.repo_path_for_initenv()],
-                 stdout=logfile, stderr=logfile, close_fds=close_fds):
+                stdout=self.logfile, stderr=self.logfile,
+                close_fds=close_fds):
             raise Exception('unable to create subversion repository')
-        if call(['svn', 'co', self.repo_url(), self.work_dir()], stdout=logfile,
-                 stderr=logfile, close_fds=close_fds):
+        if call(['svn', 'co', self.repo_url(), self.work_dir()],
+                stdout=self.logfile, stderr=self.logfile,
+                close_fds=close_fds):
             raise Exception('Checkout from %s failed.' % self.repo_url())
 
     def destroy_repo(self):
-        """The deletion of the testenvironment will remove the repo as well."""
+        """The deletion of the test environment will remove the
+        repo as well."""
         pass
 
     def repo_url(self):
@@ -61,11 +64,12 @@ class SvnFunctionalTestEnvironment(FunctionalTestEnvironment):
             self._testenv.svn_mkdir(["abc", "def"], "Add dirs")
 
         """
-        self.call_in_workdir(['svn', '--username=%s' % username, 'mkdir', '-m', msg]
-                + [self.repo_url() + '/' + d for d in paths])
+        self.call_in_workdir(['svn', '--username=%s' % username,
+                              'mkdir', '-m', msg]
+                             + [self.repo_url() + '/' + d for d in paths])
         self.call_in_workdir(['svn', 'update'])
 
-    def svn_add(self, filename, data):
+    def svn_add(self, filename, data, msg=None, username='admin'):
         """Subversion helper to add a file to the given path within the main
         repository.
 
@@ -80,8 +84,10 @@ class SvnFunctionalTestEnvironment(FunctionalTestEnvironment):
         self.call_in_workdir(['svn', 'add', filename])
         environ = os.environ.copy()
         environ['LC_ALL'] = 'C'     # Force English messages in svn
-        output = self.call_in_workdir(['svn', '--username=admin', 'commit', '-m',
-                        'Add %s' % filename, filename], environ=environ)
+        msg = 'Add %s' % filename if msg is None else msg
+        output = self.call_in_workdir(['svn', '--username=%s' % username,
+                                       'commit', '-m', msg, filename],
+                                      environ=environ)
         try:
             revision = re.search(r'Committed revision ([0-9]+)\.',
                                  output).group(1)

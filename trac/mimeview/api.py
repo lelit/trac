@@ -107,7 +107,7 @@ class RenderingContext(object):
     set up nested contexts for each matching ticket that will be used for
     rendering the ticket descriptions.
 
-    :since: version 0.11
+    :since: version 1.0
     """
 
     def __init__(self, resource, href=None, perm=None):
@@ -279,63 +279,68 @@ class RenderingContext(object):
 
 
 class Context(RenderingContext):
-    """:deprecated: old name kept for compatibility, use `RenderingContext`."""
+    """
+    :deprecated: since 1.0, use `RenderingContext` instead. `Context` is
+                 kept for compatibility and will be removed in a future
+                 release.
+    """
 
 
 # Some common MIME types and their associated keywords and/or file extensions
 
 KNOWN_MIME_TYPES = {
-    'application/javascript': 'js',
-    'application/msword':     'doc dot',
-    'application/pdf':        'pdf',
-    'application/postscript': 'ps',
-    'application/rtf':        'rtf',
-    'application/x-sh':       'sh',
-    'application/x-csh':      'csh',
-    'application/x-troff':    'nroff roff troff',
-    'application/x-yaml':     'yml yaml',
+    'application/javascript':  'js',
+    'application/msword':      'doc dot',
+    'application/pdf':         'pdf',
+    'application/postscript':  'ps',
+    'application/rtf':         'rtf',
+    'application/x-dos-batch': 'bat batch cmd dos',
+    'application/x-sh':        'sh',
+    'application/x-csh':       'csh',
+    'application/x-troff':     'nroff roff troff',
+    'application/x-yaml':      'yml yaml',
 
-    'application/rss+xml':    'rss',
-    'application/xsl+xml':    'xsl',
-    'application/xslt+xml':   'xslt',
+    'application/rss+xml':     'rss',
+    'application/xsl+xml':     'xsl',
+    'application/xslt+xml':    'xslt',
 
-    'image/x-icon':           'ico',
-    'image/svg+xml':          'svg',
+    'image/x-icon':            'ico',
+    'image/svg+xml':           'svg',
 
-    'model/vrml':             'vrml wrl',
+    'model/vrml':              'vrml wrl',
 
-    'text/css':               'css',
-    'text/html':              'html htm',
-    'text/plain':             'txt TXT text README INSTALL '
-                              'AUTHORS COPYING ChangeLog RELEASE',
-    'text/xml':               'xml',
+    'text/css':                'css',
+    'text/html':               'html htm',
+    'text/plain':              'txt TXT text README INSTALL '
+                               'AUTHORS COPYING ChangeLog RELEASE',
+    'text/xml':                'xml',
 
     # see also TEXT_X_TYPES below
-    'text/x-csrc':            'c xs',
-    'text/x-chdr':            'h',
-    'text/x-c++src':          'cc CC cpp C c++ C++',
-    'text/x-c++hdr':          'hh HH hpp H',
-    'text/x-csharp':          'cs c# C#',
-    'text/x-diff':            'patch',
-    'text/x-eiffel':          'e',
-    'text/x-elisp':           'el',
-    'text/x-fortran':         'f',
-    'text/x-haskell':         'hs',
-    'text/x-ini':             'ini cfg',
-    'text/x-objc':            'm mm',
-    'text/x-ocaml':           'ml mli',
-    'text/x-makefile':        'make mk Makefile GNUMakefile',
-    'text/x-pascal':          'pas',
-    'text/x-perl':            'pl pm PL',
-    'text/x-php':             'php3 php4',
-    'text/x-python':          'py',
-    'text/x-pyrex':           'pyx',
-    'text/x-ruby':            'rb',
-    'text/x-scheme':          'scm',
-    'text/x-textile':         'txtl',
-    'text/x-vba':             'vb vba bas',
-    'text/x-verilog':         'v',
-    'text/x-vhdl':            'vhd',
+    'text/x-csrc':             'c xs',
+    'text/x-chdr':             'h',
+    'text/x-c++src':           'cc CC cpp C c++ C++',
+    'text/x-c++hdr':           'hh HH hpp H',
+    'text/x-csharp':           'cs c# C#',
+    'text/x-diff':             'patch',
+    'text/x-eiffel':           'e',
+    'text/x-elisp':            'el',
+    'text/x-fortran':          'f',
+    'text/x-haskell':          'hs',
+    'text/x-ini':              'ini cfg',
+    'text/x-objc':             'm mm',
+    'text/x-ocaml':            'ml mli',
+    'text/x-makefile':         'make mk Makefile GNUMakefile',
+    'text/x-pascal':           'pas',
+    'text/x-perl':             'pl pm PL',
+    'text/x-php':              'php3 php4',
+    'text/x-python':           'py',
+    'text/x-pyrex':            'pyx',
+    'text/x-ruby':             'rb',
+    'text/x-scheme':           'scm',
+    'text/x-textile':          'txtl',
+    'text/x-vba':              'vb vba bas',
+    'text/x-verilog':          'v',
+    'text/x-vhdl':             'vhd',
 }
 for t in KNOWN_MIME_TYPES.keys():
     types = KNOWN_MIME_TYPES[t].split()
@@ -788,9 +793,11 @@ class Mimeview(Component):
 
                 # Render content as source code
                 if annotations:
-                    m = context.req.args.get('marks') if context.req else None
-                    return self._render_source(context, result, annotations,
-                                               m and Ranges(m))
+                    marks = context.req.args.get('marks') if context.req \
+                            else None
+                    if marks:
+                        context.set_hints(marks=marks)
+                    return self._render_source(context, result, annotations)
                 else:
                     if isinstance(result, list):
                         result = Markup('\n').join(result)
@@ -807,7 +814,7 @@ class Mimeview(Component):
                           renderer=renderer.__class__.__name__,
                           err=exception_to_unicode(e)))
 
-    def _render_source(self, context, stream, annotations, marks=None):
+    def _render_source(self, context, stream, annotations):
         from trac.web.chrome import add_warning
         annotators, labels, titles = {}, {}, {}
         for annotator in self.annotators:
@@ -850,8 +857,6 @@ class Mimeview(Component):
         def _body_rows():
             for idx, line in enumerate(_group_lines(stream)):
                 row = tag.tr()
-                if marks and idx + 1 in marks:
-                    row(class_='hilite')
                 for annotator, data in annotator_datas:
                     if annotator:
                         annotator.annotate_row(context, row, idx+1, line, data)
@@ -866,7 +871,8 @@ class Mimeview(Component):
         )
 
     def get_max_preview_size(self):
-        """:deprecated: use `max_preview_size` attribute directly."""
+        """:deprecated: since 0.10, use `max_preview_size` attribute directly.
+        """
         return self.max_preview_size
 
     def get_charset(self, content='', mimetype=None):
@@ -1108,18 +1114,28 @@ class LineNumberAnnotator(Component):
     """Text annotator that adds a column with line numbers."""
     implements(IHTMLPreviewAnnotator)
 
-    # ITextAnnotator methods
+    # IHTMLPreviewAnnotator methods
 
     def get_annotation_type(self):
         return 'lineno', _('Line'), _('Line numbers')
 
     def get_annotation_data(self, context):
-        return None
+        try:
+            marks = Ranges(context.get_hint('marks'))
+        except ValueError:
+            marks = None
+        return {
+            'id': context.get_hint('id', '') + 'L%s',
+            'marks': marks,
+            'offset': context.get_hint('lineno', 1) - 1
+        }
 
     def annotate_row(self, context, row, lineno, line, data):
-        row.append(tag.th(id='L%s' % lineno)(
-            tag.a(lineno, href='#L%s' % lineno)
-        ))
+        lineno += data['offset']
+        id = data['id'] % lineno
+        if data['marks'] and lineno in data['marks']:
+            row(class_='hilite')
+        row.append(tag.th(id=id)(tag.a(lineno, href='#' + id)))
 
 
 # -- Default renderers

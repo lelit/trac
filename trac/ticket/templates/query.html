@@ -26,8 +26,6 @@
       /*]]>*/
         /* Hide the columns by default. */
         $("#columns").toggleClass("collapsed");
-        $(".datepicker").datepicker();
-        $(".datetimepicker").datetimepicker();
       });
     </script>
   </head>
@@ -126,12 +124,13 @@
                         <py:when test="field.type == 'time'"
                                  py:with="(start, end) = '..' in constraint_value and constraint_value.split('..', 1)
                                                          or (constraint_value, '');
-                                          date_or_datetime = field.get('format', 'datetime')">
+                                          format = field.get('format', 'datetime');
+                                          date_or_datetime = 'date' if format == 'relative' else format;">
                           <i18n:msg>
                             <label>between</label>
-                            <input type="text" name="${n_field_name}" value="$start" size="14" class="${date_or_datetime}picker" />
+                            <input type="text" name="${n_field_name}" value="$start" size="14" class="trac-${date_or_datetime}picker" />
                             <label>and</label>
-                            <input type="text" name="${n_field_name}_end" value="$end" size="14" class="${date_or_datetime}picker" />
+                            <input type="text" name="${n_field_name}_end" value="$end" size="14" class="trac-${date_or_datetime}picker" />
                           </i18n:msg>
                         </py:when>
                       </td>
@@ -226,7 +225,7 @@
       </form>
 
       <xi:include href="query_results.html" />
-      <xi:include py:if="batch_modify" href="batch_modify.html" />
+      <xi:include py:if="tickets and batch_modify" href="batch_modify.html" />
 
       <div id="trac-report-buttons" class="buttons"
            py:with="edit = report_resource and 'REPORT_MODIFY' in perm(report_resource);

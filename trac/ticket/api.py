@@ -20,7 +20,9 @@ import re
 from genshi.builder import tag
 
 from trac.cache import cached
-from trac.config import *
+from trac.config import (
+    BoolOption, ConfigSection, ListOption, Option, OrderedExtensionsOption
+)
 from trac.core import *
 from trac.perm import IPermissionRequestor, PermissionCache, PermissionSystem
 from trac.resource import IResourceManager
@@ -243,6 +245,11 @@ class TicketSystem(Component):
         """Default resolution for resolving (closing) tickets
         (''since 0.11'').""")
 
+    optional_fields = ListOption('ticket', 'optional_fields',
+                                 'milestone, version', doc=
+         """Comma-separated list of `select` fields that can have
+         an empty value. //(since 1.1.2)//.""")
+
     def __init__(self):
         self.log.debug('action controllers for ticket workflow: %r' %
                 [c.__class__.__name__ for c in self.action_controllers])
@@ -318,7 +325,7 @@ class TicketSystem(Component):
 
         # Description
         fields.append({'name': 'description', 'type': 'textarea',
-                       'label': N_('Description')})
+                       'format': 'wiki', 'label': N_('Description')})
 
         # Default select and radio fields
         selects = [('type', N_('Type'), model.Type),
@@ -341,7 +348,7 @@ class TicketSystem(Component):
             if name in ('status', 'resolution'):
                 field['type'] = 'radio'
                 field['optional'] = True
-            elif name in ('milestone', 'version'):
+            elif name in self.optional_fields:
                 field['optional'] = True
             fields.append(field)
 
@@ -398,14 +405,15 @@ class TicketSystem(Component):
             }
             if field['type'] == 'select' or field['type'] == 'radio':
                 field['options'] = config.getlist(name + '.options', sep='|')
-                if '' in field['options']:
+                if '' in field['options'] or \
+                        field['name'] in self.optional_fields:
                     field['optional'] = True
-                    field['options'].remove('')
+                    if '' in field['options']:
+                        field['options'].remove('')
             elif field['type'] == 'text':
                 field['format'] = config.get(name + '.format', 'plain')
             elif field['type'] == 'textarea':
                 field['format'] = config.get(name + '.format', 'plain')
-                field['width'] = config.getint(name + '.cols')
                 field['height'] = config.getint(name + '.rows')
             elif field['type'] == 'time':
                 field['format'] = config.get(name + '.format', 'datetime')
@@ -437,7 +445,7 @@ class TicketSystem(Component):
             possible_owners.sort()
             possible_owners.insert(0, '< default >')
             field['options'] = possible_owners
-            field['optional'] = True
+            field['optional'] = 'owner' in self.optional_fields
 
     # IPermissionRequestor methods
 
@@ -515,24 +523,44 @@ class TicketSystem(Component):
                 cnum, realm, id = elts
                 if cnum != 'description' and cnum and not cnum[0].isdigit():
                     realm, id, cnum = elts # support old comment: style
+                id = as_int(id, None)
                 resource = formatter.resource(realm, id)
         else:
             resource = formatter.resource
             cnum = target
 
-        if resource and resource.realm == 'ticket':
-            id = as_int(resource.id, None)
-            if id is not None:
-                href = "%s#comment:%s" % (formatter.href.ticket(resource.id),
-                                          cnum)
-                title = _("Comment %(cnum)s for Ticket #%(id)s", cnum=cnum,
-                          id=resource.id)
-                if 'TICKET_VIEW' in formatter.perm(resource):
-                    for status, in self.env.db_query(
-                            "SELECT status FROM ticket WHERE id=%s", (id,)):
-                        return tag.a(label, href=href, title=title,
-                                     class_=status)
-                return tag.a(label, href=href, title=title)
+        if resource and resource.id and resource.realm == 'ticket' and \
+                cnum and (all(c.isdigit() for c in cnum) or cnum == 'description'):
+            href = title = class_ = None
+            if self.resource_exists(resource):
+                from trac.ticket.model import Ticket
+                ticket = Ticket(self.env, resource.id)
+                if cnum != 'description' and not ticket.get_change(cnum):
+                    title = _("ticket comment does not exist")
+                    class_ = 'missing ticket'
+                elif 'TICKET_VIEW' in formatter.perm(resource):
+                    href = formatter.href.ticket(resource.id) + \
+                           "#comment:%s" % cnum
+                    if resource.id != formatter.resource.id:
+                        if cnum == 'description':
+                            title = _("Description for Ticket #%(id)s",
+                                      id=resource.id)
+                        else:
+                            title = _("Comment %(cnum)s for Ticket #%(id)s",
+                                      cnum=cnum, id=resource.id)
+                        class_ = ticket['status'] + ' ticket'
+                    else:
+                        title = _("Description") if cnum == 'description' \
+                                                 else _("Comment %(cnum)s",
+                                                        cnum=cnum)
+                        class_ = 'ticket'
+                else:
+                    title = _("no permission to view ticket")
+                    class_ = 'forbidden ticket'
+            else:
+                title = _("ticket does not exist")
+                class_ = 'missing ticket'
+            return tag.a(label, class_=class_, href=href, title=title)
         return label
 
     # IResourceManager methods

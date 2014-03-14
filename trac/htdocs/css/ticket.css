@@ -132,8 +132,9 @@
 ul.children {
  margin-top: 1.5em;
  padding-left: 2em;
- list-style-image: url(../inreply.png);
 }
+ul.children, ul.children ul.children { list-style-image: url(../inreply.png) }
+ul.children ul, ul.children ol { list-style-image: none }
 ul.children > li.child {
  padding-left: .5em;
  margin-bottom: 1.5em;
@@ -154,12 +155,6 @@ ul.children > li.child {
 @media print {
  #changelog h3, #ticketchange h3 { box-shadow: none }
 }
-
-div.comment ul { list-style: disc }
-div.comment ul ul, div.comment ol ul { list-style: circle }
-div.comment ul ul ul, div.comment ol ul ul { list-style: square }
-div.comment ul ol ul, div.comment ol ol ul { list-style: square }
-div.comment ol { list-style: decimal }
 
 /* Comment editor */
 #trac-comment-editor { margin-left: 2em; margin-bottom: 1em }
@@ -219,16 +214,37 @@ form .field div.trac-resizable { width: 100% }
 
 #propertyform { margin-bottom: 2em; }
 #properties { white-space: nowrap; line-height: 160%; padding: .5em }
-#properties table { border-spacing: 0; width: 100%; padding: 0 .5em }
-#properties table th {
+#properties table {
+ border-spacing: 0;
+ padding: 0 .5em;
+ table-layout: fixed;
+ width: 100%;
+}
+#properties table th,
+#properties table col.th {
  padding: .4em;
  text-align: right;
- width: 20%;
  vertical-align: top;
+ white-space: normal;
+ width: 17%;
 }
 #properties table th.col2 { border-left: 1px dotted #d7d7d7 }
-#properties table td { vertical-align: middle; width: 30% }
-#properties table td.fullrow { vertical-align: middle; width: 80% }
+#properties table td,
+#properties table col.td {
+ padding-right: 0.6em;
+ vertical-align: middle;
+ width: 33%
+}
+#properties table td.fullrow { width: 83% }
+#properties table td input[type="text"],
+#properties table td textarea {
+ -moz-box-sizing: border-box;
+ box-sizing: border-box;
+ width: 100%;
+}
+#properties table td.col1 label,
+#properties table td.col2 label { float: left; margin-right: 0.5em; }
+#properties table td select { max-width: 100% }
 
 #action { line-height: 2em }
 

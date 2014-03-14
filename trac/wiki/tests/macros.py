@@ -1,4 +1,16 @@
 # -*- coding: utf-8 -*-
+#
+# Copyright (C) 2006-2013 Edgewall Software
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://trac.edgewall.org/wiki/TracLicense.
+#
+# This software consists of voluntary contributions made by many
+# individuals. For the exact contribution history, see the revision
+# history and logs, available at http://trac.edgewall.org/log/.
+
 from StringIO import StringIO
 from datetime import datetime
 import os
@@ -27,7 +39,7 @@ def add_pages(tc, names):
 def image_setup(tc):
     add_pages(tc, ['page:fr'])
     from trac.attachment import Attachment
-    tc.env.path = os.path.join(tempfile.gettempdir(), 'trac-tempenv')
+    tc.env.path = tempfile.mkdtemp(prefix='trac-tempenv-')
     attachment = Attachment(tc.env, 'wiki', 'page:fr')
     attachment.description = "image in page:fr"
     attachment.insert('img.png', StringIO(''), 0, 2)
@@ -118,13 +130,13 @@ IMAGE_MACRO_TEST_CASES = u"""
 ------------------------------
 <a style="padding:0; border:none" href="/wiki/WikiStart"><img src="/browser/%C2%AB%20test%C2%A0%C2%BB?format=raw" alt="/browser/« test »" title="/browser/« test »" /></a>
 ============================== Strip unicode white-spaces and ZWSPs (#10668)
-[[Image(  ​source:« test ».png　 ​, nolink)]]
+[[Image(  ​source:« test ».png　 ​, nolink, 100%　 ​)]]
 ------------------------------
 <p>
-<img src="/browser/%C2%AB%20test%C2%A0%C2%BB.png?format=raw" alt="source:« test ».png" title="source:« test ».png" />
+<img width="100%" alt="source:« test ».png" title="source:« test ».png" src="/browser/%C2%AB%20test%C2%A0%C2%BB.png?format=raw" />
 </p>
 ------------------------------
-<img src="/browser/%C2%AB%20test%C2%A0%C2%BB.png?format=raw" alt="source:« test ».png" title="source:« test ».png" />
+<img width="100%" alt="source:« test ».png" title="source:« test ».png" src="/browser/%C2%AB%20test%C2%A0%C2%BB.png?format=raw" />
 ------------------------------
 ============================== Attachments on page with ':' characters (#10562)
 [[Image("page:fr":img.png​,nolink)]]
@@ -134,6 +146,23 @@ IMAGE_MACRO_TEST_CASES = u"""
 </p>
 ------------------------------
 <img src="/raw-attachment/wiki/page%3Afr/img.png" alt="image in page:fr" title="image in page:fr" />
+------------------------------
+============================== htdocs: Image, nolink
+[[Image(htdocs:trac_logo.png, nolink)]]
+------------------------------
+<p>
+<img src="/chrome/site/trac_logo.png" alt="trac_logo.png" title="trac_logo.png" />
+</p>
+------------------------------
+<img src="/chrome/site/trac_logo.png" alt="trac_logo.png" title="trac_logo.png" />
+============================== shared: Image, nolink
+[[Image(shared:trac_logo.png, nolink)]]
+------------------------------
+<p>
+<img src="/chrome/shared/trac_logo.png" alt="trac_logo.png" title="trac_logo.png" />
+</p>
+------------------------------
+<img src="/chrome/shared/trac_logo.png" alt="trac_logo.png" title="trac_logo.png" />
 ------------------------------
 """
 
@@ -419,8 +448,8 @@ TRACINI_MACRO_TEST_CASES = u"""\
 </p><div class="tracini">\
 <h3 id="section-42-section"><code>[section-42]</code></h3>\
 <table class="wiki"><tbody>\
-<tr><td><tt>option1</tt></td><td></td><td class="default"><code>value</code></td></tr>\
-<tr><td><tt>option2</tt></td><td>blah</td><td class="default"><code>value</code></td></tr>\
+<tr class="even"><td><code>option1</code></td><td></td><td class="default"><code>value</code></td></tr>\
+<tr class="odd"><td><code>option2</code></td><td>blah</td><td class="default"><code>value</code></td></tr>\
 </tbody></table>\
 </div><p>
 </p>
@@ -432,7 +461,7 @@ TRACINI_MACRO_TEST_CASES = u"""\
 </p><div class="tracini">\
 <h3 id="section-list-section"><code>[section-list]</code></h3>\
 <table class="wiki"><tbody>\
-<tr><td><tt>option1</tt></td><td></td><td class="default"><code>4.2|42|42||0|enabled</code></td></tr>\
+<tr class="even"><td><code>option1</code></td><td></td><td class="default"><code>4.2|42|42||0|enabled</code></td></tr>\
 </tbody></table>\
 </div><p>
 </p>
@@ -444,11 +473,11 @@ TRACINI_MACRO_TEST_CASES = u"""\
 </p><div class="tracini">\
 <h3 id="section-def-section"><code>[section-def]</code></h3>\
 <table class="wiki"><tbody>\
-<tr><td><tt>option1</tt></td><td></td><td class="nodefault">(no default)</td></tr>\
-<tr><td><tt>option2</tt></td><td></td><td class="nodefault">(no default)</td></tr>\
-<tr><td><tt>option3</tt></td><td></td><td class="default"><code>0</code></td></tr>\
-<tr><td><tt>option4</tt></td><td></td><td class="default"><code>disabled</code></td></tr>\
-<tr><td><tt>option5</tt></td><td></td><td class="default"><code></code></td></tr>\
+<tr class="even"><td><code>option1</code></td><td></td><td class="nodefault">(no default)</td></tr>\
+<tr class="odd"><td><code>option2</code></td><td></td><td class="nodefault">(no default)</td></tr>\
+<tr class="even"><td><code>option3</code></td><td></td><td class="default"><code>0</code></td></tr>\
+<tr class="odd"><td><code>option4</code></td><td></td><td class="default"><code>disabled</code></td></tr>\
+<tr class="even"><td><code>option5</code></td><td></td><td class="default"><code></code></td></tr>\
 </tbody></table>\
 </div><p>
 </p>

@@ -1,3 +1,16 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2004-2013 Edgewall Software
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://trac.edgewall.org/wiki/TracLicense.
+#
+# This software consists of voluntary contributions made by many
+# individuals. For the exact contribution history, see the revision
+# history and logs, available at http://trac.edgewall.org/log/.
+
 from trac import perm
 from trac.core import *
 from trac.test import EnvironmentStub
@@ -21,10 +34,10 @@ class DefaultPermissionStoreTestCase(unittest.TestCase):
             [('john', 'WIKI_MODIFY'),
              ('john', 'REPORT_ADMIN'),
              ('kate', 'TICKET_CREATE')])
-        self.assertEquals(['REPORT_ADMIN', 'WIKI_MODIFY'],
-                          sorted(self.store.get_user_permissions('john')))
-        self.assertEquals(['TICKET_CREATE'],
-                          self.store.get_user_permissions('kate'))
+        self.assertEqual(['REPORT_ADMIN', 'WIKI_MODIFY'],
+                         sorted(self.store.get_user_permissions('john')))
+        self.assertEqual(['TICKET_CREATE'],
+                         self.store.get_user_permissions('kate'))
 
     def test_simple_group(self):
         self.env.db_transaction.executemany(
@@ -32,8 +45,8 @@ class DefaultPermissionStoreTestCase(unittest.TestCase):
             [('dev', 'WIKI_MODIFY'),
              ('dev', 'REPORT_ADMIN'),
              ('john', 'dev')])
-        self.assertEquals(['REPORT_ADMIN', 'WIKI_MODIFY'],
-                          sorted(self.store.get_user_permissions('john')))
+        self.assertEqual(['REPORT_ADMIN', 'WIKI_MODIFY'],
+                         sorted(self.store.get_user_permissions('john')))
 
     def test_nested_groups(self):
         self.env.db_transaction.executemany(
@@ -42,8 +55,8 @@ class DefaultPermissionStoreTestCase(unittest.TestCase):
              ('dev', 'REPORT_ADMIN'),
              ('admin', 'dev'),
              ('john', 'admin')])
-        self.assertEquals(['REPORT_ADMIN', 'WIKI_MODIFY'],
-                          sorted(self.store.get_user_permissions('john')))
+        self.assertEqual(['REPORT_ADMIN', 'WIKI_MODIFY'],
+                         sorted(self.store.get_user_permissions('john')))
 
     def test_mixed_case_group(self):
         self.env.db_transaction.executemany(
@@ -52,8 +65,8 @@ class DefaultPermissionStoreTestCase(unittest.TestCase):
              ('Dev', 'REPORT_ADMIN'),
              ('Admin', 'Dev'),
              ('john', 'Admin')])
-        self.assertEquals(['REPORT_ADMIN', 'WIKI_MODIFY'],
-                          sorted(self.store.get_user_permissions('john')))
+        self.assertEqual(['REPORT_ADMIN', 'WIKI_MODIFY'],
+                         sorted(self.store.get_user_permissions('john')))
 
     def test_builtin_groups(self):
         self.env.db_transaction.executemany(
@@ -61,10 +74,10 @@ class DefaultPermissionStoreTestCase(unittest.TestCase):
             [('authenticated', 'WIKI_MODIFY'),
              ('authenticated', 'REPORT_ADMIN'),
              ('anonymous', 'TICKET_CREATE')])
-        self.assertEquals(['REPORT_ADMIN', 'TICKET_CREATE', 'WIKI_MODIFY'],
-                          sorted(self.store.get_user_permissions('john')))
-        self.assertEquals(['TICKET_CREATE'],
-                          self.store.get_user_permissions('anonymous'))
+        self.assertEqual(['REPORT_ADMIN', 'TICKET_CREATE', 'WIKI_MODIFY'],
+                         sorted(self.store.get_user_permissions('john')))
+        self.assertEqual(['TICKET_CREATE'],
+                         self.store.get_user_permissions('anonymous'))
 
     def test_get_all_permissions(self):
         self.env.db_transaction.executemany(
@@ -76,7 +89,7 @@ class DefaultPermissionStoreTestCase(unittest.TestCase):
                     ('dev', 'REPORT_ADMIN'),
                     ('john', 'dev')]
         for res in self.store.get_all_permissions():
-            self.failIf(res not in expected)
+            self.assertFalse(res not in expected)
 
 
 class TestPermissionRequestor(Component):
@@ -130,7 +143,7 @@ class PermissionSystemTestCase(unittest.TestCase):
         expected = [('bob', 'TEST_CREATE'),
                     ('jane', 'TEST_ADMIN')]
         for res in self.perm.get_all_permissions():
-            self.failIf(res not in expected)
+            self.assertFalse(res not in expected)
 
     def test_expand_actions_iter_7467(self):
         # Check that expand_actions works with iterators (#7467)
@@ -146,6 +159,8 @@ class PermissionCacheTestCase(unittest.TestCase):
         self.env = EnvironmentStub(enable=[perm.DefaultPermissionStore,
                                            perm.DefaultPermissionPolicy,
                                            TestPermissionRequestor])
+        self.env.config.set('trac', 'permission_policies',
+                            'DefaultPermissionPolicy')
         self.perm_system = perm.PermissionSystem(self.env)
         # by-pass DefaultPermissionPolicy cache:
         perm.DefaultPermissionPolicy.CACHE_EXPIRY = -1
@@ -157,14 +172,14 @@ class PermissionCacheTestCase(unittest.TestCase):
         self.env.reset_db()
 
     def test_contains(self):
-        self.assertEqual(True, 'TEST_MODIFY' in self.perm)
-        self.assertEqual(True, 'TEST_ADMIN' in self.perm)
-        self.assertEqual(False, 'TRAC_ADMIN' in self.perm)
+        self.assertTrue('TEST_MODIFY' in self.perm)
+        self.assertTrue('TEST_ADMIN' in self.perm)
+        self.assertFalse('TRAC_ADMIN' in self.perm)
 
     def test_has_permission(self):
-        self.assertEqual(True, self.perm.has_permission('TEST_MODIFY'))
-        self.assertEqual(True, self.perm.has_permission('TEST_ADMIN'))
-        self.assertEqual(False, self.perm.has_permission('TRAC_ADMIN'))
+        self.assertTrue(self.perm.has_permission('TEST_MODIFY'))
+        self.assertTrue(self.perm.has_permission('TEST_ADMIN'))
+        self.assertFalse(self.perm.has_permission('TRAC_ADMIN'))
 
     def test_require(self):
         self.perm.require('TEST_MODIFY')
@@ -259,13 +274,16 @@ class PermissionPolicyTestCase(unittest.TestCase):
         self.assertEqual(self.policy.results,
                          {('testuser', 'TEST_MODIFY'): True,
                           ('testuser', 'TEST_ADMIN'): None})
+
+
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(DefaultPermissionStoreTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(PermissionSystemTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(PermissionCacheTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(PermissionPolicyTestCase, 'test'))
+    suite.addTest(unittest.makeSuite(DefaultPermissionStoreTestCase))
+    suite.addTest(unittest.makeSuite(PermissionSystemTestCase))
+    suite.addTest(unittest.makeSuite(PermissionCacheTestCase))
+    suite.addTest(unittest.makeSuite(PermissionPolicyTestCase))
     return suite
 
+
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(defaultTest='suite')

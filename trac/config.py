@@ -18,12 +18,13 @@ from ConfigParser import ConfigParser
 from copy import deepcopy
 import os.path
 
+from genshi.builder import tag
 from trac.admin import AdminCommandError, IAdminCommandProvider
 from trac.core import *
 from trac.util import AtomicFile, as_bool
-from trac.util.compat import cleandoc
+from trac.util.compat import cleandoc, wait_for_file_mtime_change
 from trac.util.text import printout, to_unicode, CRLF
-from trac.util.translation import _, N_
+from trac.util.translation import _, N_, tag_
 
 __all__ = ['Configuration', 'ConfigSection', 'Option', 'BoolOption',
            'IntOption', 'FloatOption', 'ListOption', 'ChoiceOption',
@@ -42,6 +43,12 @@ def _to_utf8(basestr):
 class ConfigurationError(TracError):
     """Exception raised when a value in the configuration file is not valid."""
     title = N_('Configuration Error')
+
+    def __init__(self, message=None, title=None, show_traceback=False):
+        if message is None:
+            message = _("Look in the Trac log for more information.")
+        super(ConfigurationError, self).__init__(message, title,
+                                                 show_traceback)
 
 
 class Configuration(object):
@@ -234,6 +241,7 @@ class Configuration(object):
 
         # At this point, all the strings in `sections` are UTF-8 encoded `str`
         try:
+            wait_for_file_mtime_change(self.filename)
             with AtomicFile(self.filename, 'w') as fileobj:
                 fileobj.write('# -*- coding: utf-8 -*-\n\n')
                 for section_str, options in sections:
@@ -288,7 +296,8 @@ class Configuration(object):
 
     def touch(self):
         if self.filename and os.path.isfile(self.filename) \
-           and os.access(self.filename, os.W_OK):
+                and os.access(self.filename, os.W_OK):
+            wait_for_file_mtime_change(self.filename)
             os.utime(self.filename, None)
 
     def set_defaults(self, compmgr=None):
@@ -327,7 +336,7 @@ class Section(object):
         for parent in self.config.parents:
             if parent[self.name].contains(key, defaults=False):
                 return True
-        return defaults and Option.registry.has_key((self.name, key))
+        return defaults and (self.name, key) in Option.registry
 
     __contains__ = contains
 
@@ -569,7 +578,9 @@ class Option(object):
     """Descriptor for configuration options."""
 
     registry = {}
-    accessor = Section.get
+
+    def accessor(self, section, name, default):
+        return section.get(name, default)
 
     @staticmethod
     def get_registry(compmgr=None):
@@ -608,7 +619,7 @@ class Option(object):
             return value
 
     def __set__(self, instance, value):
-        raise AttributeError, 'can\'t set attribute'
+        raise AttributeError(_("Setting attribute is not allowed."))
 
     def __repr__(self):
         return '<%s [%s] "%s">' % (self.__class__.__name__, self.section,
@@ -629,17 +640,23 @@ class Option(object):
 
 class BoolOption(Option):
     """Descriptor for boolean configuration options."""
-    accessor = Section.getbool
+
+    def accessor(self, section, name, default):
+        return section.getbool(name, default)
 
 
 class IntOption(Option):
     """Descriptor for integer configuration options."""
-    accessor = Section.getint
+
+    def accessor(self, section, name, default):
+        return section.getint(name, default)
 
 
 class FloatOption(Option):
     """Descriptor for float configuration options."""
-    accessor = Section.getfloat
+
+    def accessor(self, section, name, default):
+        return section.getfloat(name, default)
 
 
 class ListOption(Option):
@@ -692,10 +709,15 @@ class PathOption(Option):
     Relative paths are resolved to absolute paths using the directory
     containing the configuration file as the reference.
     """
-    accessor = Section.getpath
+
+    def accessor(self, section, name, default):
+        return section.getpath(name, default)
 
 
 class ExtensionOption(Option):
+    """Name of a component implementing `interface`. Raises a
+    `ConfigurationError` if the component cannot be found in the list of
+    active components implementing the interface."""
 
     def __init__(self, section, name, interface, default=None, doc='',
                  doc_domain='tracini'):
@@ -709,11 +731,14 @@ class ExtensionOption(Option):
         for impl in self.xtnpt.extensions(instance):
             if impl.__class__.__name__ == value:
                 return impl
-        raise AttributeError('Cannot find an implementation of the "%s" '
-                             'interface named "%s".  Please update the option '
-                             '%s.%s in trac.ini.'
-                             % (self.xtnpt.interface.__name__, value,
-                                self.section, self.name))
+        raise ConfigurationError(
+            tag_("Cannot find an implementation of the %(interface)s "
+                 "interface named %(implementation)s. Please check "
+                 "that the Component is enabled or update the option "
+                 "%(option)s in trac.ini.",
+                 interface=tag.code(self.xtnpt.interface.__name__),
+                 implementation=tag.code(value),
+                 option=tag.code("[%s] %s" % (self.section, self.name))))
 
 
 class OrderedExtensionsOption(ListOption):
@@ -735,9 +760,23 @@ class OrderedExtensionsOption(ListOption):
             return self
         order = ListOption.__get__(self, instance, owner)
         components = []
+        implementing_classes = []
         for impl in self.xtnpt.extensions(instance):
+            implementing_classes.append(impl.__class__.__name__)
             if self.include_missing or impl.__class__.__name__ in order:
                 components.append(impl)
+        not_found = sorted(set(order) - set(implementing_classes))
+        if not_found:
+            raise ConfigurationError(
+                tag_("Cannot find implementation(s) of the %(interface)s "
+                     "interface named %(implementation)s. Please check "
+                     "that the Component is enabled or update the option "
+                     "%(option)s in trac.ini.",
+                     interface=tag.code(self.xtnpt.interface.__name__),
+                     implementation=tag(
+                         (', ' if idx != 0 else None, tag.code(impl))
+                         for idx, impl in enumerate(not_found)),
+                     option=tag.code("[%s] %s" % (self.section, self.name))))
 
         def compare(x, y):
             x, y = x.__class__.__name__, y.__class__.__name__

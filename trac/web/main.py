@@ -48,7 +48,7 @@ from trac.util.text import exception_to_unicode, shorten_line, to_unicode
 from trac.util.translation import _, get_negotiated_locale, has_babel, \
                                   safefmt, tag_
 from trac.web.api import *
-from trac.web.chrome import Chrome
+from trac.web.chrome import Chrome, add_warning
 from trac.web.href import Href
 from trac.web.session import Session
 
@@ -132,11 +132,18 @@ class RequestDispatcher(Component):
 
     def authenticate(self, req):
         for authenticator in self.authenticators:
-            authname = authenticator.authenticate(req)
+            try:
+                authname = authenticator.authenticate(req)
+            except TracError, e:
+                self.log.error("Can't authenticate using %s: %s",
+                               authenticator.__class__.__name__,
+                               exception_to_unicode(e, traceback=True))
+                add_warning(req, _("Authentication error. "
+                                   "Please contact your administrator."))
+                break  # don't fallback to other authenticators
             if authname:
                 return authname
-        else:
-            return 'anonymous'
+        return 'anonymous'
 
     def dispatch(self, req):
         """Find a registered handler that matches the request and let
@@ -175,8 +182,8 @@ class RequestDispatcher(Component):
                             chosen_handler = self.default_handler
                     # pre-process any incoming request, whether a handler
                     # was found or not
-                    chosen_handler = self._pre_process_request(req,
-                                                            chosen_handler)
+                    chosen_handler = \
+                        self._pre_process_request(req, chosen_handler)
                 except TracError, e:
                     raise HTTPInternalError(e)
                 if not chosen_handler:
@@ -220,8 +227,8 @@ class RequestDispatcher(Component):
                             _("Clearsilver templates are no longer supported, "
                               "please contact your Trac administrator."))
                     # Genshi
-                    template, data, content_type = \
-                              self._post_process_request(req, *resp)
+                    template, data, content_type, method = \
+                        self._post_process_request(req, *resp)
                     if 'hdfdump' in req.args:
                         req.perm.require('TRAC_ADMIN')
                         # debugging helper - no need to render first
@@ -230,7 +237,8 @@ class RequestDispatcher(Component):
                         req.send(out.getvalue(), 'text/plain')
 
                     output = chrome.render_template(req, template, data,
-                                                    content_type)
+                                                    content_type,
+                                                    method=method)
                     req.send(output, content_type or 'text/html')
                 else:
                     self._post_process_request(req)
@@ -277,7 +285,8 @@ class RequestDispatcher(Component):
             default = self.env.config.get('trac', 'default_language', '')
             negotiated = get_negotiated_locale([preferred, default] +
                                                req.languages)
-            self.log.debug("Negotiated locale: %s -> %s", preferred, negotiated)
+            self.log.debug("Negotiated locale: %s -> %s", preferred,
+                           negotiated)
             return negotiated
 
     def _get_lc_time(self, req):
@@ -306,7 +315,7 @@ class RequestDispatcher(Component):
         If the the user does not have a `trac_form_token` cookie a new
         one is generated.
         """
-        if req.incookie.has_key('trac_form_token'):
+        if 'trac_form_token' in req.incookie:
             return req.incookie['trac_form_token'].value
         else:
             req.outcookie['trac_form_token'] = hex_entropy(24)
@@ -326,8 +335,12 @@ class RequestDispatcher(Component):
         return chosen_handler
 
     def _post_process_request(self, req, *args):
-        nbargs = len(args)
         resp = args
+        # `method` is optional in IRequestHandler's response. If not
+        # specified, the default value is appended to response.
+        if len(resp) == 3:
+            resp += (None,)
+        nbargs = len(resp)
         for f in reversed(self.filters):
             # As the arity of `post_process_request` has changed since
             # Trac 0.10, only filters with same arity gets passed real values.
@@ -336,9 +349,16 @@ class RequestDispatcher(Component):
             extra_arg_count = arity(f.post_process_request) - 1
             if extra_arg_count == nbargs:
                 resp = f.post_process_request(req, *resp)
+            elif extra_arg_count == nbargs - 1:
+                # IRequestFilters may modify the `method`, but the `method`
+                # is forwarded when not accepted by the IRequestFilter.
+                method = resp[-1]
+                resp = f.post_process_request(req, *resp[:-1])
+                resp += (method,)
             elif nbargs == 0:
                 f.post_process_request(req, *(None,)*extra_arg_count)
         return resp
+
 
 _slashes_re = re.compile(r'/+')
 
@@ -487,7 +507,7 @@ def _dispatch_request(req, env, env_error):
 
     # fixup env.abs_href if `[trac] base_url` was not specified
     if env and not env.abs_href.base:
-        env._abs_href = req.abs_href
+        env.abs_href = req.abs_href
 
     try:
         if not env and env_error:
@@ -495,12 +515,12 @@ def _dispatch_request(req, env, env_error):
         try:
             dispatcher = RequestDispatcher(env)
             dispatcher.dispatch(req)
-        except RequestDone:
-            pass
-        resp = req._response or []
+        except RequestDone, req_done:
+            resp = req_done.iterable
+        resp = resp or req._response or []
     except HTTPException, e:
         _send_user_error(req, env, e)
-    except Exception, e:
+    except Exception:
         send_internal_error(env, req, sys.exc_info())
     return resp
 
@@ -543,6 +563,7 @@ def _send_user_error(req, env, e):
     except RequestDone:
         pass
 
+
 def send_internal_error(env, req, exc_info):
     if env:
         env.log.error("Internal Server Error: %s",
@@ -559,6 +580,7 @@ def send_internal_error(env, req, exc_info):
         pass
 
     tracker = default_tracker
+    tracker_args = {}
     if has_admin and not isinstance(exc_info[1], MemoryError):
         # Collect frame and plugin information
         frames = get_frame_info(exc_info[2])
@@ -578,6 +600,9 @@ def send_internal_error(env, req, exc_info):
                     tracker = info['trac']
                 elif info.get('home_page', '').startswith(th):
                     tracker = th
+                    plugin_name = info.get('home_page', '').rstrip('/') \
+                                                           .split('/')[-1]
+                    tracker_args = {'component': plugin_name}
 
     def get_description(_):
         if env and has_admin:
@@ -628,7 +653,7 @@ User agent: `#USER_AGENT#`
             'traceback': traceback, 'frames': frames,
             'shorten_line': shorten_line, 'repr': safe_repr,
             'plugins': plugins, 'faulty_plugins': faulty_plugins,
-            'tracker': tracker,
+            'tracker': tracker, 'tracker_args': tracker_args,
             'description': description, 'description_en': description_en}
 
     try:
@@ -722,7 +747,7 @@ def get_environments(environ, warn=False):
         paths = [path[:-1] for path in paths if path[-1] == '/'
                  and not any(fnmatch.fnmatch(path[:-1], pattern)
                              for pattern in ignore_patterns)]
-        env_paths.extend(os.path.join(env_parent_dir, project) \
+        env_paths.extend(os.path.join(env_parent_dir, project)
                          for project in paths)
     envs = {}
     for env_path in env_paths:

@@ -217,12 +217,18 @@ def reset_mysql_db(env, db_prop):
     dbname = os.path.basename(db_prop['path'])
     if dbname:
         with env.db_transaction as db:
-            tables = db("""SELECT table_name FROM information_schema.tables
+            tables = db("""SELECT table_name, auto_increment
+                           FROM information_schema.tables
                            WHERE table_schema=%s""", (dbname,))
-            for table in tables:
-                # TRUNCATE TABLE is prefered to DELETE FROM, as we need to reset
-                # the auto_increment in MySQL.
-                db("TRUNCATE TABLE %s" % table)
+            for table, auto_increment in tables:
+                if auto_increment is None or auto_increment == 1:
+                    # DELETE FROM is prefered to TRUNCATE TABLE, as the
+                    # auto_increment is not used or it is 1.
+                    db("DELETE FROM %s" % table)
+                else:
+                    # TRUNCATE TABLE is prefered to DELETE FROM, as we need to
+                    # reset the auto_increment in MySQL.
+                    db("TRUNCATE TABLE %s" % table)
             return tables
 
 
@@ -233,6 +239,7 @@ class EnvironmentStub(Environment):
 
     href = abs_href = None
     global_databasemanager = None
+    required = False
 
     def __init__(self, default_data=False, enable=None, disable=None,
                  path=None, destroying=False):
@@ -242,7 +249,14 @@ class EnvironmentStub(Environment):
                              defaults.
         :param enable: A list of component classes or name globs to
                        activate in the stub environment.
+        :param disable: A list of component classes or name globs to
+                        deactivate in the stub environment.
         """
+        if enable is not None and not isinstance(enable, (list, tuple)):
+            raise TypeError('Keyword argument "enable" must be a list')
+        if disable is not None and not isinstance(disable, (list, tuple)):
+            raise TypeError('Keyword argument "disable" must be a list')
+
         ComponentManager.__init__(self)
         Component.__init__(self)
 
@@ -266,7 +280,7 @@ class EnvironmentStub(Environment):
         if enable is not None:
             self.config.set('components', 'trac.*', 'disabled')
         else:
-            self.config.set('components', 'tracopt.versioncontrol.svn.*',
+            self.config.set('components', 'tracopt.versioncontrol.*',
                             'enabled')
         for name_or_class in enable or ():
             config_key = self._component_name(name_or_class)
@@ -285,7 +299,7 @@ class EnvironmentStub(Environment):
 
         init_global = False
         if self.global_databasemanager:
-            self.components[DatabaseManager] = global_databasemanager
+            self.components[DatabaseManager] = self.global_databasemanager
         else:
             self.config.set('trac', 'database', self.dburi)
             self.global_databasemanager = DatabaseManager(self)
@@ -415,6 +429,7 @@ def suite():
     import trac.admin.tests
     import trac.db.tests
     import trac.mimeview.tests
+    import trac.timeline.tests
     import trac.ticket.tests
     import trac.util.tests
     import trac.versioncontrol.tests
@@ -423,17 +438,17 @@ def suite():
     import trac.wiki.tests
     import tracopt.mimeview.tests
     import tracopt.perm.tests
+    import tracopt.ticket.tests
     import tracopt.versioncontrol.git.tests
     import tracopt.versioncontrol.svn.tests
 
     suite = unittest.TestSuite()
     suite.addTest(trac.tests.basicSuite())
-    if INCLUDE_FUNCTIONAL_TESTS:
-        suite.addTest(trac.tests.functionalSuite())
     suite.addTest(trac.admin.tests.suite())
     suite.addTest(trac.db.tests.suite())
     suite.addTest(trac.mimeview.tests.suite())
     suite.addTest(trac.ticket.tests.suite())
+    suite.addTest(trac.timeline.tests.suite())
     suite.addTest(trac.util.tests.suite())
     suite.addTest(trac.versioncontrol.tests.suite())
     suite.addTest(trac.versioncontrol.web_ui.tests.suite())
@@ -441,9 +456,12 @@ def suite():
     suite.addTest(trac.wiki.tests.suite())
     suite.addTest(tracopt.mimeview.tests.suite())
     suite.addTest(tracopt.perm.tests.suite())
+    suite.addTest(tracopt.ticket.tests.suite())
     suite.addTest(tracopt.versioncontrol.git.tests.suite())
     suite.addTest(tracopt.versioncontrol.svn.tests.suite())
     suite.addTest(doctest.DocTestSuite(sys.modules[__name__]))
+    if INCLUDE_FUNCTIONAL_TESTS:
+        suite.addTest(trac.tests.functionalSuite())
 
     return suite
 

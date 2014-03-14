@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2012 Edgewall Software
+# Copyright (C) 2012-2013 Edgewall Software
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -11,26 +11,32 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
+from __future__ import with_statement
+
 import os
-import shutil
 import tempfile
 import unittest
 from subprocess import Popen, PIPE
 
 from trac.test import locate, EnvironmentStub
+from trac.tests import compat
+from trac.tests.compat import rmtree
 from trac.util import create_file
 from trac.util.compat import close_fds
-from tracopt.versioncontrol.git.PyGIT import GitCore, Storage, parse_commit
+from trac.versioncontrol.api import Changeset, DbRepositoryProvider
+from tracopt.versioncontrol.git.git_fs import GitConnector
+from tracopt.versioncontrol.git.PyGIT import GitCore, GitError, Storage, \
+                                             StorageFactory, parse_commit
 
 
 class GitTestCase(unittest.TestCase):
 
     def test_is_sha(self):
-        self.assertTrue(not GitCore.is_sha('123'))
+        self.assertFalse(GitCore.is_sha('123'))
         self.assertTrue(GitCore.is_sha('1a3f'))
         self.assertTrue(GitCore.is_sha('f' * 40))
-        self.assertTrue(not GitCore.is_sha('x' + 'f' * 39))
-        self.assertTrue(not GitCore.is_sha('f' * 41))
+        self.assertFalse(GitCore.is_sha('x' + 'f' * 39))
+        self.assertFalse(GitCore.is_sha('f' * 41))
 
     def test_git_version(self):
         v = Storage.git_version()
@@ -91,17 +97,17 @@ prettier.  I'll tell Ted to use nicer tag names for future cases.
         msg, props = parse_commit(self.commit2240a7b)
         self.assertTrue(msg)
         self.assertTrue(props)
-        self.assertEquals(
+        self.assertEqual(
             ['30aaca4582eac20a52ac7b2ec35bdb908133e5b1',
              '5a0dc7365c240795bf190766eba7a27600be3b3e'],
             props['parent'])
-        self.assertEquals(
+        self.assertEqual(
             ['Linus Torvalds <torvalds@linux-foundation.org> 1323915958 -0800'],
             props['author'])
-        self.assertEquals(props['author'], props['committer'])
+        self.assertEqual(props['author'], props['committer'])
 
         # Merge tag
-        self.assertEquals(['''\
+        self.assertEqual(['''\
 object 5a0dc7365c240795bf190766eba7a27600be3b3e
 type commit
 tag tytso-for-linus-20111214A
@@ -127,7 +133,7 @@ dQpo6WWG9HIJ23hOGAGR
 -----END PGP SIGNATURE-----'''], props['mergetag'])
 
         # Message
-        self.assertEquals("""Merge tag 'tytso-for-linus-20111214' of git://git.kernel.org/pub/scm/linux/kernel/git/tytso/ext4
+        self.assertEqual("""Merge tag 'tytso-for-linus-20111214' of git://git.kernel.org/pub/scm/linux/kernel/git/tytso/ext4
 
 * tag 'tytso-for-linus-20111214' of git://git.kernel.org/pub/scm/linux/kernel/git/tytso/ext4:
   ext4: handle EOF correctly in ext4_bio_write_page()
@@ -144,30 +150,183 @@ signature automatically.  Yay.  The branchname was just 'dev', which is
 prettier.  I'll tell Ted to use nicer tag names for future cases.""", msg)
 
 
-class UnicodeNameTestCase(unittest.TestCase):
+class NormalTestCase(unittest.TestCase):
 
     def setUp(self):
         self.env = EnvironmentStub()
-        self.repos_path = tempfile.mkdtemp(prefix='trac-gitrepos')
+        self.repos_path = tempfile.mkdtemp(prefix='trac-gitrepos-')
         self.git_bin = locate('git')
         # create git repository and master branch
         self._git('init', self.repos_path)
-        self._git('config', 'user.name', u"Joé")
+        self._git('config', 'core.quotepath', 'true')  # ticket:11198
+        self._git('config', 'user.name', "Joe")
         self._git('config', 'user.email', "joe@example.com")
         create_file(os.path.join(self.repos_path, '.gitignore'))
         self._git('add', '.gitignore')
-        self._git('commit', '-a', '-m', 'test')
+        self._git('commit', '-a', '-m', 'test',
+                  '--date', 'Tue Jan 1 18:04:56 2013 +0900')
 
     def tearDown(self):
+        self.env.reset_db()
         if os.path.isdir(self.repos_path):
-            shutil.rmtree(self.repos_path)
+            rmtree(self.repos_path)
 
     def _git(self, *args):
         args = [self.git_bin] + list(args)
         proc = Popen(args, stdout=PIPE, stderr=PIPE, close_fds=close_fds,
                      cwd=self.repos_path)
-        proc.wait()
-        assert proc.returncode == 0, proc.stderr.read()
+        stdout, stderr = proc.communicate()
+        self.assertEqual(0, proc.returncode,
+               'git exits with %r, stdout %r, stderr %r' % (proc.returncode,
+                                                            stdout, stderr))
+        return proc
+
+    def _factory(self, weak, path=None):
+        if path is None:
+            path = os.path.join(self.repos_path, '.git')
+        return StorageFactory(path, self.env.log, weak)
+
+    def _storage(self, path=None):
+        if path is None:
+            path = os.path.join(self.repos_path, '.git')
+        return Storage(path, self.env.log, self.git_bin, 'utf-8')
+
+    def test_control_files_detection(self):
+        # Exception not raised when path points to ctrl file dir
+        self.assertIsInstance(self._storage().repo, GitCore)
+        # Exception not raised when path points to parent of ctrl files dir
+        self.assertIsInstance(self._storage(self.repos_path).repo, GitCore)
+        # Exception raised when path points to dir with no ctrl files
+        path = tempfile.mkdtemp(dir=self.repos_path)
+        self.assertRaises(GitError, self._storage, path)
+        # Exception raised if a ctrl file is missing
+        os.remove(os.path.join(self.repos_path, '.git', 'HEAD'))
+        self.assertRaises(GitError, self._storage, self.repos_path)
+
+    def test_get_branches_with_cr_in_commitlog(self):
+        # regression test for #11598
+        message = 'message with carriage return'.replace(' ', '\r')
+
+        create_file(os.path.join(self.repos_path, 'ticket11598.txt'))
+        self._git('add', 'ticket11598.txt')
+        self._git('commit', '-m', message,
+                  '--date', 'Thu May 9 20:05:21 2013 +0900')
+
+        storage = self._storage()
+        branches = sorted(storage.get_branches())
+        self.assertEqual('master', branches[0][0])
+        self.assertEqual(1, len(branches))
+
+    if os.name == 'nt':
+        del test_get_branches_with_cr_in_commitlog
+
+    def test_rev_is_anchestor_of(self):
+        # regression test for #11215
+        path = os.path.join(self.repos_path, '.git')
+        DbRepositoryProvider(self.env).add_repository('gitrepos', path, 'git')
+        repos = self.env.get_repository('gitrepos')
+        parent_rev = repos.youngest_rev
+
+        create_file(os.path.join(self.repos_path, 'ticket11215.txt'))
+        self._git('add', 'ticket11215.txt')
+        self._git('commit', '-m', 'ticket11215',
+                  '--date', 'Fri Jun 28 03:26:02 2013 +0900')
+        repos.sync()
+        rev = repos.youngest_rev
+
+        self.assertNotEqual(rev, parent_rev)
+        self.assertFalse(repos.rev_older_than(None, None))
+        self.assertFalse(repos.rev_older_than(None, rev[:7]))
+        self.assertFalse(repos.rev_older_than(rev[:7], None))
+        self.assertTrue(repos.rev_older_than(parent_rev, rev))
+        self.assertTrue(repos.rev_older_than(parent_rev[:7], rev[:7]))
+        self.assertFalse(repos.rev_older_than(rev, parent_rev))
+        self.assertFalse(repos.rev_older_than(rev[:7], parent_rev[:7]))
+
+    def test_node_get_history_with_empty_commit(self):
+        # regression test for #11328
+        path = os.path.join(self.repos_path, '.git')
+        DbRepositoryProvider(self.env).add_repository('gitrepos', path, 'git')
+        repos = self.env.get_repository('gitrepos')
+        parent_rev = repos.youngest_rev
+
+        self._git('commit', '-m', 'ticket:11328', '--allow-empty',
+                  '--date', 'Tue Oct 15 18:46:27 2013 +0900')
+        repos.sync()
+        rev = repos.youngest_rev
+
+        node = repos.get_node('', rev)
+        self.assertEqual(rev, repos.git.last_change(rev, ''))
+        history = list(node.get_history())
+        self.assertEqual(u'', history[0][0])
+        self.assertEqual(rev, history[0][1])
+        self.assertEqual(Changeset.EDIT, history[0][2])
+        self.assertEqual(u'', history[1][0])
+        self.assertEqual(parent_rev, history[1][1])
+        self.assertEqual(Changeset.ADD, history[1][2])
+        self.assertEqual(2, len(history))
+
+    def test_sync_after_removing_branch(self):
+        self._git('checkout', '-b', 'b1', 'master')
+        self._git('checkout', 'master')
+        create_file(os.path.join(self.repos_path, 'newfile.txt'))
+        self._git('add', 'newfile.txt')
+        self._git('commit', '-m', 'added newfile.txt to master',
+                  '--date', 'Mon Dec 23 15:52:23 2013 +0900')
+
+        storage = self._storage()
+        storage.sync()
+        self.assertEqual(['b1', 'master'],
+                         sorted(b[0] for b in storage.get_branches()))
+        self._git('branch', '-D', 'b1')
+        self.assertEqual(True, storage.sync())
+        self.assertEqual(['master'],
+                         sorted(b[0] for b in storage.get_branches()))
+        self.assertEqual(False, storage.sync())
+
+    def test_turn_off_persistent_cache(self):
+        # persistent_cache is enabled
+        parent_rev = self._factory(False).getInstance().youngest_rev()
+
+        create_file(os.path.join(self.repos_path, 'newfile.txt'))
+        self._git('add', 'newfile.txt')
+        self._git('commit', '-m', 'test_turn_off_persistent_cache',
+                  '--date', 'Wed, 29 Jan 2014 22:13:25 +0900')
+
+        # persistent_cache is disabled
+        rev = self._factory(True).getInstance().youngest_rev()
+        self.assertNotEqual(rev, parent_rev)
+
+
+class UnicodeNameTestCase(unittest.TestCase):
+
+    def setUp(self):
+        self.env = EnvironmentStub()
+        self.repos_path = tempfile.mkdtemp(prefix='trac-gitrepos-')
+        self.git_bin = locate('git')
+        # create git repository and master branch
+        self._git('init', self.repos_path)
+        self._git('config', 'core.quotepath', 'true')  # ticket:11198
+        self._git('config', 'user.name', "Joé")  # passing utf-8 bytes
+        self._git('config', 'user.email', "joe@example.com")
+        create_file(os.path.join(self.repos_path, '.gitignore'))
+        self._git('add', '.gitignore')
+        self._git('commit', '-a', '-m', 'test',
+                  '--date', 'Tue Jan 1 18:04:57 2013 +0900')
+
+    def tearDown(self):
+        self.env.reset_db()
+        if os.path.isdir(self.repos_path):
+            rmtree(self.repos_path)
+
+    def _git(self, *args):
+        args = [self.git_bin] + list(args)
+        proc = Popen(args, stdout=PIPE, stderr=PIPE, close_fds=close_fds,
+                     cwd=self.repos_path)
+        stdout, stderr = proc.communicate()
+        self.assertEqual(0, proc.returncode,
+               'git exits with %r, stdout %r, stderr %r' % (proc.returncode,
+                                                            stdout, stderr))
         return proc
 
     def _storage(self):
@@ -177,7 +336,7 @@ class UnicodeNameTestCase(unittest.TestCase):
     def test_unicode_verifyrev(self):
         storage = self._storage()
         self.assertNotEqual(None, storage.verifyrev(u'master'))
-        self.assertEquals(None, storage.verifyrev(u'tété'))
+        self.assertIsNone(storage.verifyrev(u'tété'))
 
     def test_unicode_filename(self):
         create_file(os.path.join(self.repos_path, 'tickét.txt'))
@@ -187,37 +346,84 @@ class UnicodeNameTestCase(unittest.TestCase):
         storage = self._storage()
         filenames = sorted(fname for mode, type, sha, size, fname
                                  in storage.ls_tree('HEAD'))
-        self.assertEquals(unicode, type(filenames[0]))
-        self.assertEquals(unicode, type(filenames[1]))
-        self.assertEquals(u'.gitignore', filenames[0])
-        self.assertEquals(u'tickét.txt', filenames[1])
+        self.assertEqual(unicode, type(filenames[0]))
+        self.assertEqual(unicode, type(filenames[1]))
+        self.assertEqual(u'.gitignore', filenames[0])
+        self.assertEqual(u'tickét.txt', filenames[1])
         # check commit author, for good measure
-        self.assertEquals(u'Joé <joe@example.com> 1359912600 +0100',
-                          storage.read_commit(storage.head())[1]['author'][0])
+        self.assertEqual(u'Joé <joe@example.com> 1359912600 +0100',
+                         storage.read_commit(storage.head())[1]['author'][0])
 
     def test_unicode_branches(self):
         self._git('checkout', '-b', 'tickét10980', 'master')
         storage = self._storage()
         branches = sorted(storage.get_branches())
-        self.assertEquals(unicode, type(branches[0][0]))
-        self.assertEquals(unicode, type(branches[1][0]))
-        self.assertEquals(u'master', branches[0][0])
-        self.assertEquals(u'tickét10980', branches[1][0])
+        self.assertEqual(unicode, type(branches[0][0]))
+        self.assertEqual(unicode, type(branches[1][0]))
+        self.assertEqual(u'master', branches[0][0])
+        self.assertEqual(u'tickét10980', branches[1][0])
 
         contains = sorted(storage.get_branch_contains(branches[1][1],
                                                       resolve=True))
-        self.assertEquals(unicode, type(contains[0][0]))
-        self.assertEquals(unicode, type(contains[1][0]))
-        self.assertEquals(u'master', contains[0][0])
-        self.assertEquals(u'tickét10980', contains[1][0])
+        self.assertEqual(unicode, type(contains[0][0]))
+        self.assertEqual(unicode, type(contains[1][0]))
+        self.assertEqual(u'master', contains[0][0])
+        self.assertEqual(u'tickét10980', contains[1][0])
 
     def test_unicode_tags(self):
         self._git('tag', 'täg-t10980', 'master')
         storage = self._storage()
         tags = tuple(storage.get_tags())
-        self.assertEquals(unicode, type(tags[0]))
-        self.assertEquals(u'täg-t10980', tags[0])
+        self.assertEqual(unicode, type(tags[0]))
+        self.assertEqual(u'täg-t10980', tags[0])
         self.assertNotEqual(None, storage.verifyrev(u'täg-t10980'))
+
+    def test_ls_tree(self):
+        paths = [u'normal-path.txt',
+                 u'tickét.tx\\t',
+                 u'\a\b\t\n\v\f\r\x1b"\\.tx\\t']
+        for path in paths:
+            path_utf8 = path.encode('utf-8')
+            create_file(os.path.join(self.repos_path, path_utf8))
+            self._git('add', path_utf8)
+        self._git('commit', '-m', 'ticket:11180 and ticket:11198',
+                  '--date', 'Fri Aug 30 00:48:57 2013 +0900')
+
+        storage = self._storage()
+        rev = storage.head()
+        entries = storage.ls_tree(rev, '/')
+        self.assertEqual(4, len(entries))
+        self.assertEqual(u'\a\b\t\n\v\f\r\x1b"\\.tx\\t', entries[0][4])
+        self.assertEqual(u'.gitignore', entries[1][4])
+        self.assertEqual(u'normal-path.txt', entries[2][4])
+        self.assertEqual(u'tickét.tx\\t', entries[3][4])
+
+    def test_get_historian(self):
+        paths = [u'normal-path.txt',
+                 u'tickét.tx\\t',
+                 u'\a\b\t\n\v\f\r\x1b"\\.tx\\t']
+
+        for path in paths:
+            path_utf8 = path.encode('utf-8')
+            create_file(os.path.join(self.repos_path, path_utf8))
+            self._git('add', path_utf8)
+        self._git('commit', '-m', 'ticket:11180 and ticket:11198',
+                  '--date', 'Fri Aug 30 00:48:57 2013 +0900')
+
+        def validate(path, quotepath):
+            self._git('config', 'core.quotepath', quotepath)
+            storage = self._storage()
+            rev = storage.head()
+            with storage.get_historian('HEAD', path) as historian:
+                hrev = storage.last_change('HEAD', path, historian)
+                self.assertEquals(rev, hrev)
+
+        validate(paths[0], 'true')
+        validate(paths[0], 'false')
+        validate(paths[1], 'true')
+        validate(paths[1], 'false')
+        validate(paths[2], 'true')
+        validate(paths[2], 'false')
 
 
 #class GitPerformanceTestCase(unittest.TestCase):
@@ -238,7 +444,7 @@ class UnicodeNameTestCase(unittest.TestCase):
 #                i = str(i)
 #                s = g.shortrev(i, min_len=4)
 #                self.assertTrue(i.startswith(s))
-#                self.assertEquals(g.fullrev(s), i)
+#                self.assertEqual(g.fullrev(s), i)
 #
 #        iters = 1
 #        t = timeit.Timer("shortrev_test()",
@@ -266,7 +472,7 @@ class UnicodeNameTestCase(unittest.TestCase):
 #                    t = open(__proc_statm)
 #                    result = t.read().split()
 #                    t.close()
-#                    assert len(result) == 7
+#                    self.assertEqual(7, len(result))
 #                    return tuple([ __pagesize*int(p) for p in result ])
 #                except:
 #                    raise RuntimeError("failed to get memory stats")
@@ -372,11 +578,12 @@ def suite():
     suite = unittest.TestSuite()
     git = locate("git")
     if git:
-        suite.addTest(unittest.makeSuite(GitTestCase, 'test'))
-        suite.addTest(unittest.makeSuite(TestParseCommit, 'test'))
+        suite.addTest(unittest.makeSuite(GitTestCase))
+        suite.addTest(unittest.makeSuite(TestParseCommit))
+        suite.addTest(unittest.makeSuite(NormalTestCase))
         if os.name != 'nt':
             # Popen doesn't accept unicode path and arguments on Windows
-            suite.addTest(unittest.makeSuite(UnicodeNameTestCase, 'test'))
+            suite.addTest(unittest.makeSuite(UnicodeNameTestCase))
     else:
         print("SKIP: tracopt/versioncontrol/git/tests/PyGIT.py (git cli "
               "binary, 'git', not found)")

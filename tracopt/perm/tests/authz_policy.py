@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2012 Edgewall Software
+# Copyright (C) 2012-2013 Edgewall Software
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -19,6 +19,8 @@ try:
 except ImportError:
     ConfigObj = None
 
+from trac.tests import compat
+from trac.config import ConfigurationError
 from trac.resource import Resource
 from trac.test import EnvironmentStub
 from trac.util import create_file
@@ -46,7 +48,7 @@ administrators = éat
 @administrators = WIKI_VIEW
 * =
 """)
-        self.env = EnvironmentStub(enable=[AuthzPolicy])
+        self.env = EnvironmentStub(enable=[AuthzPolicy], path=tmpdir)
         self.env.config.set('authz_policy', 'authz_file', self.authz_file)
         self.authz_policy = AuthzPolicy(self.env)
 
@@ -78,11 +80,66 @@ administrators = éat
             True,
             self.check_permission('WIKI_VIEW', u'éat', resource, None))
 
+    def test_get_authz_file(self):
+        """get_authz_file should resolve a relative path and lazily compute.
+        """
+        authz_file = self.authz_policy.get_authz_file
+        self.assertEqual(os.path.join(self.env.path, 'trac-authz-policy'),
+                         authz_file)
+        self.assertIs(authz_file, self.authz_policy.get_authz_file)
+
+    def test_get_authz_file_notfound_raises(self):
+        """ConfigurationError exception should be raised if file not found."""
+        authz_file = os.path.join(self.env.path, 'some-nonexistent-file')
+        self.env.config.set('authz_policy', 'authz_file', authz_file)
+        self.assertRaises(ConfigurationError, getattr, self.authz_policy,
+                          'get_authz_file')
+
+    def test_get_authz_file_notdefined_raises(self):
+        """ConfigurationError exception should be raised if the option
+        `[authz_policy] authz_file` is not specified in trac.ini."""
+        self.env.config.remove('authz_policy', 'authz_file')
+        self.assertRaises(ConfigurationError, getattr, self.authz_policy,
+                          'get_authz_file')
+
+    def test_get_authz_file_empty_raises(self):
+        """ConfigurationError exception should be raised if the option
+        `[authz_policy] authz_file` is empty."""
+        self.env.config.set('authz_policy', 'authz_file', '')
+        self.assertRaises(ConfigurationError, getattr, self.authz_policy,
+                          'get_authz_file')
+
+    def test_parse_authz_empty_raises(self):
+        """ConfigurationError should be raised if the file is empty."""
+        create_file(self.authz_file, "")
+        self.assertRaises(ConfigurationError, self.authz_policy.parse_authz)
+
+    def test_parse_authz_malformed_raises(self):
+        """ConfigurationError should be raised if the file is malformed."""
+        create_file(self.authz_file, """\
+wiki:WikiStart]
+änon = WIKI_VIEW
+* =
+""")
+        self.assertRaises(ConfigurationError, self.authz_policy.parse_authz)
+
+    def test_parse_authz_duplicated_sections_raises(self):
+        """ConfigurationError should be raised if the file has duplicate
+        sections."""
+        create_file(self.authz_file, """\
+[wiki:WikiStart]
+änon = WIKI_VIEW
+
+[wiki:WikiStart]
+änon = WIKI_VIEW
+""")
+        self.assertRaises(ConfigurationError, self.authz_policy.parse_authz)
+
 
 def suite():
     suite = unittest.TestSuite()
     if ConfigObj:
-        suite.addTest(unittest.makeSuite(AuthzPolicyTestCase, 'test'))
+        suite.addTest(unittest.makeSuite(AuthzPolicyTestCase))
     else:
         print "SKIP: tracopt/perm/tests/authz_policy.py (no configobj " + \
               "installed)"

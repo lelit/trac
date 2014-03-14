@@ -432,11 +432,12 @@ class Query(object):
 
         enum_columns = ('resolution', 'priority', 'severity')
         # Build the list of actual columns to query
-        cols = self.cols[:]
+        cols = []
         def add_cols(*args):
             for col in args:
                 if not col in cols:
                     cols.append(col)
+        add_cols(*self.cols)  # remove duplicated cols
         if self.group and not self.group in cols:
             add_cols(self.group)
         if self.rows:
@@ -454,17 +455,20 @@ class Query(object):
                                          if c not in custom_fields]))
         sql.append(",priority.value AS priority_value")
         for k in [db.quote(k) for k in cols if k in custom_fields]:
-            sql.append(",c.%s AS %s" % (k, k))
-        sql.append("\nFROM ticket AS t")
+            sql.append(",t.%s AS %s" % (k, k))
 
-        # Join with ticket_custom table as necessary
+        # Use subquery of ticket_custom table as necessary
         if any(k in custom_fields for k in cols):
-            sql.append("\n  LEFT JOIN (SELECT id AS ticket")
-            sql.extend(",\n    (SELECT c.value FROM ticket_custom c "
+            sql.append('\nFROM (\n  SELECT ' +
+                       ','.join('t.%s AS %s' % (c, c)
+                                for c in cols if c not in custom_fields))
+            sql.extend(",\n  (SELECT c.value FROM ticket_custom c "
                        "WHERE c.ticket=t.id AND c.name='%s') AS %s"
                        % (k, db.quote(k))
                        for k in cols if k in custom_fields)
-            sql.append("\n    FROM ticket t) AS c ON (c.ticket=t.id)")
+            sql.append("\n  FROM ticket AS t) AS t")
+        else:
+            sql.append("\nFROM ticket AS t")
 
         # Join with the enum table for proper sorting
         for col in [c for c in enum_columns
@@ -491,7 +495,7 @@ class Query(object):
             if name not in custom_fields:
                 col = 't.' + name
             else:
-                col = 'c.' + db.quote(name)
+                col = 't.' + db.quote(name)
             value = value[len(mode) + neg:]
 
             if name in self.time_fields:
@@ -593,7 +597,7 @@ class Query(object):
                     if k not in custom_fields:
                         col = 't.' + k
                     else:
-                        col = 'c.' + db.quote(k)
+                        col = 't.' + db.quote(k)
                     clauses.append("COALESCE(%s,'') %sIN (%s)"
                                    % (col, 'NOT ' if neg else '',
                                       ','.join(['%s' for val in v])))
@@ -634,7 +638,7 @@ class Query(object):
             if name in enum_columns:
                 col = name + '.value'
             elif name in custom_fields:
-                col = 'c.' + db.quote(name)
+                col = 't.' + db.quote(name)
             else:
                 col = 't.' + name
             desc = ' DESC' if desc else ''
@@ -868,7 +872,8 @@ class QueryModule(Component):
     def get_navigation_items(self, req):
         from trac.ticket.report import ReportModule
         if 'TICKET_VIEW' in req.perm and \
-                not self.env.is_component_enabled(ReportModule):
+                not (self.env.is_component_enabled(ReportModule) and
+                     'REPORT_VIEW' in req.perm):
             yield ('mainnav', 'tickets',
                    tag.a(_('View Tickets'), href=req.href.query()))
 
@@ -879,6 +884,9 @@ class QueryModule(Component):
 
     def process_request(self, req):
         req.perm.assert_permission('TICKET_VIEW')
+        report_id = req.args.get('report')
+        if report_id:
+            req.perm('report', report_id).assert_permission('REPORT_VIEW')
 
         constraints = self._get_constraints(req)
         args = req.args
@@ -895,7 +903,7 @@ class QueryModule(Component):
 
             self.log.debug('QueryModule: Using default query: %s', str(qstring))
             if qstring.startswith('?'):
-                arg_list = parse_arg_list(qstring[1:])
+                arg_list = parse_arg_list(qstring)
                 args = arg_list_to_args(arg_list)
                 constraints = self._get_constraints(arg_list=arg_list)
             else:
@@ -933,7 +941,7 @@ class QueryModule(Component):
         max = args.get('max')
         if max is None and format in ('csv', 'tab'):
             max = 0 # unlimited unless specified explicitly
-        query = Query(self.env, req.args.get('report'),
+        query = Query(self.env, report_id,
                       constraints, cols, args.get('order'),
                       'desc' in args, args.get('group'),
                       'groupdesc' in args, 'verbose' in args,
@@ -1121,7 +1129,8 @@ class QueryModule(Component):
 
         properties = dict((name, dict((key, field[key])
                                       for key in ('type', 'label', 'options',
-                                                  'optgroups', 'format')
+                                                  'optgroups', 'optional',
+                                                  'format')
                                       if key in field))
                           for name, field in data['fields'].iteritems())
         add_script_data(req, properties=properties, modes=data['modes'])

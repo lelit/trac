@@ -1,22 +1,137 @@
-#!/usr/bin/python
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2008-2013 Edgewall Software
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://trac.edgewall.org/wiki/TracLicense.
+#
+# This software consists of voluntary contributions made by many
+# individuals. For the exact contribution history, see the revision
+# history and logs, available at http://trac.edgewall.org/log/.
+
 from trac.tests.functional import *
 from trac.mimeview.rst import has_docutils
 from trac.util import get_pkginfo
 
+try:
+    from configobj import ConfigObj
+except ImportError:
+    ConfigObj = None
+
+
 class TestWiki(FunctionalTwillTestCaseSetup):
     def runTest(self):
-        """Create a wiki page and attach a file"""
-        # TODO: this should be split into multiple tests
-        pagename = random_unique_camel()
-        self._tester.create_wiki_page(pagename)
-        self._tester.attach_file_to_wiki(pagename)
+        """Create a wiki page."""
+        self._tester.create_wiki_page()
+
+
+class TestWikiAddAttachment(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Add attachment to a wiki page. Test that the attachment
+        button reads 'Attach file' when no files have been attached, and
+        'Attach another file' when there are existing attachments.
+        Feature added in http://trac.edgewall.org/ticket/10281"""
+        name = self._tester.create_wiki_page()
+        self._tester.go_to_wiki(name)
+        tc.find("Attach file")
+        filename = self._tester.attach_file_to_wiki(name)
+
+        self._tester.go_to_wiki(name)
+        tc.find("Attach another file")
+        tc.find('Attachments <span class="trac-count">\(1\)</span>')
+        tc.find(filename)
+        tc.find('Download all attachments as:\s+<a rel="nofollow" '
+                'href="/zip-attachment/wiki/%s/">.zip</a>' % name)
+
+
+class TestWikiHistory(FunctionalTwillTestCaseSetup):
+    """Create wiki page and navigate to page history."""
+    def runTest(self):
+        pagename = self._tester.create_wiki_page()
+        self._tester.edit_wiki_page(pagename)
+        tc.follow(r"\bHistory\b")
+        tc.url(self._tester.url + r'/wiki/%s\?action=history' % pagename)
+        version_link = '<td class="version">[ \t\n]*' \
+                       '<a href="/wiki/%(pagename)s\?version=%%(version)s" ' \
+                       'title="View this version">%%(version)s[ \t\n]*</a>' \
+                        % {'pagename': pagename}
+        tc.find(version_link % {'version': 1})
+        tc.find(version_link % {'version': 2})
+        tc.formvalue('history', 'old_version', '1')
+        tc.formvalue('history', 'version', '2')
+        tc.submit()
+        tc.url(r'%s/wiki/%s\?action=diff&version=2&old_version=1'
+               % (self._tester.url, pagename))
+        tc.find(r'<a href="/wiki/%s\?version=1">Version 1</a>' % pagename)
+        tc.find(r'<a href="/wiki/%s\?version=2">Version 2</a>' % pagename)
+        tc.find(r'<a href="/wiki/%(name)s">%(name)s</a>' % {'name': pagename})
+
+
+class TestWikiReadonlyAttribute(FunctionalTwillTestCaseSetup):
+    """Test the wiki readonly attribute, which is enforce when
+    ReadonlyWikiPolicy is in the list of active permission policies."""
+    def runTest(self):
+        self._tester.logout()
+        self._tester.login('user')
+        page_name = self._tester.create_wiki_page()
+        permission_policies = \
+            self._testenv.get_config('trac', 'permission_policies')
+        readonly_checkbox = '<input type="checkbox" name="readonly" ' + \
+                            'id="readonly" />'
+        attach_button = '<input type="submit" id="attachfilebutton" ' + \
+                        'value="Attach.+file" />'
+        try:
+            # User without WIKI_ADMIN can't set a page read-only
+            tc.formvalue('modifypage', 'action', 'edit')
+            tc.submit()
+            tc.notfind(readonly_checkbox)
+
+            # User with WIKI_ADMIN can set a page read-only
+            # and still edit that page
+            self._testenv.grant_perm('user', 'WIKI_ADMIN')
+            self._tester.go_to_wiki(page_name)
+            tc.formvalue('modifypage', 'action', 'edit')
+            tc.submit()
+            tc.find(readonly_checkbox)
+            tc.formvalue('edit', 'readonly', True)
+            tc.submit('save')
+            tc.go(self._tester.url + '/attachment/wiki/' + page_name)
+            tc.find(attach_button)
+            self._tester.edit_wiki_page(page_name)
+
+            # User without WIKI_ADMIN can't edit a read-only page
+            self._testenv.revoke_perm('user', 'WIKI_ADMIN')
+            self._tester.go_to_wiki(page_name)
+            tc.notfind('<input type="submit" value="Edit this page">')
+            tc.go(self._tester.url + '/attachment/wiki/' + page_name)
+            tc.notfind(attach_button)
+
+            # Read-only checkbox is not present when ReadonlyWikiPolicy
+            # is not in the list of active permission policies
+            pp_list = [p.strip() for p in permission_policies.split(',')]
+            pp_list.remove('ReadonlyWikiPolicy')
+            self._testenv._tracadmin('trac', 'permission_policies',
+                                     ', '.join(pp_list))
+            self._testenv.grant_perm('user', 'WIKI_ADMIN')
+            self._tester.go_to_wiki(page_name)
+            tc.formvalue('modifypage', 'action', 'edit')
+            tc.submit()
+            tc.notfind(readonly_checkbox)
+        finally:
+            self._testenv.set_config('trac', 'permission_policies',
+                                     permission_policies)
+            self._testenv.revoke_perm('user', 'WIKI_ADMIN')
+            self._tester.logout()
+            self._tester.login('admin')
 
 
 class TestWikiRename(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Test for simple wiki rename"""
-        pagename = random_unique_camel()
-        self._tester.create_wiki_page(pagename)
+        pagename = self._tester.create_wiki_page()
         attachment = self._tester.attach_file_to_wiki(pagename)
         base_url = self._tester.url
         page_url = base_url + "/wiki/" + pagename
@@ -97,8 +212,7 @@ class RegressionTestTicket4812(FunctionalTwillTestCaseSetup):
 class ReStructuredTextWikiTest(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Render reStructured text using a wikiprocessor"""
-        pagename = random_unique_camel()
-        self._tester.create_wiki_page(pagename, content="""
+        pagename = self._tester.create_wiki_page(content="""
 {{{
 #!rst
 Hello
@@ -118,8 +232,7 @@ Hello
 class ReStructuredTextCodeBlockTest(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Render reStructured code block"""
-        pagename = random_unique_camel()
-        self._tester.create_wiki_page(pagename, content="""
+        pagename = self._tester.create_wiki_page(content="""
 {{{
 #!rst
 .. code-block:: python
@@ -131,6 +244,54 @@ class ReStructuredTextCodeBlockTest(FunctionalTwillTestCaseSetup):
         tc.notfind("code-block")
         tc.find('print')
         tc.find('"123"')
+
+
+class RegressionTestTicket8976(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Test for regression of http://trac.edgewall.org/ticket/8976
+        Test fine grained permissions policy on wiki for specific page
+        versions."""
+        name = self._tester.create_wiki_page()
+        self._tester.edit_wiki_page(name)
+        self._tester.edit_wiki_page(name)
+        self._tester.logout()
+        self._tester.login('user')
+        try:
+            self._tester.go_to_wiki(name, 1)
+            tc.notfind(r"\bError: Forbidden\b")
+            self._tester.go_to_wiki(name, 2)
+            tc.notfind(r"\bError: Forbidden\b")
+            self._tester.go_to_wiki(name, 3)
+            tc.notfind(r"\bError: Forbidden\b")
+            self._tester.go_to_wiki(name, 4)
+            tc.find(r"\bTrac Error\b")
+            self._tester.go_to_wiki(name)
+            tc.notfind(r"\bError: Forbidden\b")
+            self._testenv.enable_authz_permpolicy("""
+                [wiki:%(name)s@1]
+                * = !WIKI_VIEW
+                [wiki:%(name)s@2]
+                * = WIKI_VIEW
+                [wiki:%(name)s@3]
+                * = !WIKI_VIEW
+                [wiki:%(name)s]
+                * = WIKI_VIEW
+            """ % {'name': name})
+            self._tester.go_to_wiki(name, 1)
+            tc.find(r"\bError: Forbidden\b")
+            self._tester.go_to_wiki(name, 2)
+            tc.notfind(r"\bError: Forbidden\b")
+            self._tester.go_to_wiki(name, 3)
+            tc.find(r"\bError: Forbidden\b")
+            self._tester.go_to_wiki(name, 4)
+            tc.find(r"\bTrac Error\b")
+            self._tester.go_to_wiki(name)
+            tc.notfind(r"\bError: Forbidden\b")
+            self._tester.edit_wiki_page(name)
+        finally:
+            self._tester.logout()
+            self._tester.login('admin')
+            self._testenv.disable_authz_permpolicy()
 
 
 class RegressionTestTicket10274(FunctionalTwillTestCaseSetup):
@@ -147,30 +308,29 @@ class RegressionTestTicket10274(FunctionalTwillTestCaseSetup):
 class RegressionTestTicket10850(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Test for regression of http://trac.edgewall.org/ticket/10850"""
-        pagename = random_unique_camel()
-        self._tester.create_wiki_page(pagename)
+        pagename = self._tester.create_wiki_page()
         # colon characters
         attachment = self._tester.attach_file_to_wiki(
-            pagename, tempfilename='2012-09-11_15:36:40-test.tbz2')
+            pagename, filename='2012-09-11_15:36:40-test.tbz2')
         base_url = self._tester.url
         tc.go(base_url + '/attachment/wiki/' + pagename +
               '/2012-09-11_15:36:40-test.tbz2')
         tc.notfind('Error: Invalid Attachment')
         # backslash characters
         attachment = self._tester.attach_file_to_wiki(
-            pagename, tempfilename=r'/tmp/back\slash.txt')
+            pagename, filename=r'/tmp/back\slash.txt')
         base_url = self._tester.url
         tc.go(base_url + '/attachment/wiki/' + pagename + r'/back\slash.txt')
         tc.notfind('Error: Invalid Attachment')
         # Windows full path
         attachment = self._tester.attach_file_to_wiki(
-            pagename, tempfilename=r'z:\tmp\windows:path.txt')
+            pagename, filename=r'z:\tmp\windows:path.txt')
         base_url = self._tester.url
         tc.go(base_url + '/attachment/wiki/' + pagename + r'/windows:path.txt')
         tc.notfind('Error: Invalid Attachment')
         # Windows share folder path
         attachment = self._tester.attach_file_to_wiki(
-            pagename, tempfilename=r'\\server\share\file:name.txt')
+            pagename, filename=r'\\server\share\file:name.txt')
         base_url = self._tester.url
         tc.go(base_url + '/attachment/wiki/' + pagename + r'/file:name.txt')
         tc.notfind('Error: Invalid Attachment')
@@ -180,6 +340,7 @@ class RegressionTestTicket10957(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Test for regression of http://trac.edgewall.org/ticket/10957"""
 
+        self._tester.go_to_front()
         try:
             self._tester.logout()
 
@@ -242,16 +403,31 @@ class RegressionTestTicket10957(FunctionalTwillTestCaseSetup):
             self._testenv.revoke_perm('anonymous', 'WIKI_CREATE')
 
 
+class RegressionTestTicket11302(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Test for regression of http://trac.edgewall.org/ticket/11302"""
+        pagename = self._tester.create_wiki_page()
+        attachment = self._tester.attach_file_to_wiki(
+            pagename, description="illustrates [./@1#point1]")
+        self._tester.go_to_wiki(pagename + '?action=edit')
+        tc.find(r'illustrates <a class="wiki"'
+                r' href="/wiki/%s\?version=1#point1">@1</a>' % pagename)
+
+
 def functionalSuite(suite=None):
     if not suite:
-        import trac.tests.functional.testcases
-        suite = trac.tests.functional.testcases.functionalSuite()
+        import trac.tests.functional
+        suite = trac.tests.functional.functionalSuite()
     suite.addTest(TestWiki())
+    suite.addTest(TestWikiAddAttachment())
+    suite.addTest(TestWikiHistory())
+    suite.addTest(TestWikiReadonlyAttribute())
     suite.addTest(TestWikiRename())
     suite.addTest(RegressionTestTicket4812())
     suite.addTest(RegressionTestTicket10274())
     suite.addTest(RegressionTestTicket10850())
     suite.addTest(RegressionTestTicket10957())
+    suite.addTest(RegressionTestTicket11302())
     if has_docutils:
         import docutils
         if get_pkginfo(docutils):
@@ -261,6 +437,10 @@ def functionalSuite(suite=None):
             print "SKIP: reST wiki tests (docutils has no setuptools metadata)"
     else:
         print "SKIP: reST wiki tests (no docutils)"
+    if ConfigObj:
+        suite.addTest(RegressionTestTicket8976())
+    else:
+        print "SKIP: RegressionTestTicket8976 (ConfigObj not installed)"
     return suite
 
 

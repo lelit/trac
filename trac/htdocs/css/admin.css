@@ -38,7 +38,6 @@
 
 #tabcontent { padding: 0.4em 0 0.4em 2em; margin-left: 12em; min-height: 300px; }
 #tabcontent h2 { color: #333; }
-p.help { color: #666; font-size: 90%; margin: 1em .5em .5em; }
 
 #enumlist tbody td { vertical-align: middle; }
 
@@ -57,14 +56,14 @@ form.addnew p.help {
 }
 form.addnew div.field,
 form.addnew div.buttons {
- padding: 0.2em 0.5em 0.2em 0;
+ padding: 0.2em 0;
  white-space: nowrap;
 }
-form.addnew div.buttons input { margin: 0 0.5em 0 0; }
+form.addnew div.field { padding-right: 1em; }
+form.addnew div.buttons input { margin: 0 1em 0 0; }
 form.addnew p.hint,
 form.addnew span.hint {
- padding-left: 0.5em;
- padding-right: 0.5em;
+ padding-left: 0.25em;
 }
 form.addnew p.help { margin-top: 0.5em; }
 form.addnew br { display: none; }
@@ -126,9 +125,10 @@ table.trac-pluglist td { padding-left: 1em; }
 #permlist { margin-bottom: 2em; }
 #permlist label, #grouplist label {
  float: left;
- min-width: 13em;
- max-width: 33%;
- padding: 0 2em 0 0;
+ width: 13em;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ padding: 0;
  white-space: nowrap;
 }
 fieldset tr.field th { text-align: right; }

@@ -8,7 +8,6 @@
   <xi:include href="layout.html" />
   <head>
     <title>${title or _('Error')}</title>
-    <link rel="stylesheet" type="text/css" href="${chrome.htdocs_location}css/code.css"/>
     <script py:if="frames" type="text/javascript">/*<![CDATA[*/
       jQuery(document).ready(function($) {
         $("#traceback a").click(function() {
@@ -40,7 +39,7 @@
        $("#tbtoggle").parent().show();
 
        $("#systeminfo").append("<tr><th>jQuery</th><td>" + $().jquery + "</td></tr>");
-       $("#systeminfo").before("<p>User Agent: <tt>" + navigator.userAgent + "</tt></p>");
+       $("#systeminfo").before("<p>User Agent: <code>" + navigator.userAgent + "</code></p>");
       });
     /*]]>*/</script>
     <script type="text/javascript">/*<![CDATA[*/
@@ -58,6 +57,7 @@
     <input type="hidden" name="reporter" value="${get_reporter_id(req)}" />
     <input py:if="url == trac.homepage.strip('/')" type="hidden" name="version"
            value="${trac.version.split('-', 1)[0] if 'dev' in trac.version else trac.version}" />
+    <input type="hidden" name="$arg" value="$value" py:for="arg, value in tracker_args.iteritems()" />
     <input type="hidden" name="summary" value="$message" />
     <textarea name="description" rows="3" cols="10">
 ${description_en if url else description}</textarea>
@@ -72,7 +72,7 @@ ${description_en if url else description}</textarea>
         <py:when test="'TracError'">
           <h1>$title</h1>
           <py:choose test="">
-            <p py:when="istext(message)" class="message">$message</p>
+            <p py:when="not find_element(message, tag='p')" class="message">$message</p>
             <py:otherwise>$message</py:otherwise>
           </py:choose>
         </py:when>

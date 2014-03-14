@@ -28,8 +28,6 @@ try:
     import babel
 except ImportError:
     babel = None
-    def get_known_locales():
-        return []
 else:
     from babel import Locale
     from babel.core import LOCALE_ALIASES, UnknownLocaleError
@@ -41,10 +39,6 @@ else:
         get_time_format, get_month_names,
         get_period_names, get_day_names
     )
-    try:
-        from babel.localedata import list as get_known_locales
-    except ImportError:
-        from babel.localedata import locale_identifiers as get_known_locales
 
 from trac.core import TracError
 from trac.util.text import to_unicode, getpreferredencoding
@@ -61,12 +55,14 @@ def to_datetime(t, tzinfo=None):
 
     ``t`` is converted using the following rules:
 
-     - If ``t`` is already a `datetime` object,
-       - if it is timezone-"naive", it is localized to ``tzinfo``
-       - if it is already timezone-aware, ``t`` is mapped to the given
-         timezone (`datetime.datetime.astimezone`)
-     - If ``t`` is None, the current time will be used.
-     - If ``t`` is a number, it is interpreted as a timestamp.
+    * If ``t`` is already a `datetime` object,
+
+     * if it is timezone-"naive", it is localized to ``tzinfo``
+     * if it is already timezone-aware, ``t`` is mapped to the given
+       timezone (`datetime.datetime.astimezone`)
+
+    * If ``t`` is None, the current time will be used.
+    * If ``t`` is a number, it is interpreted as a timestamp.
 
     Any other input will trigger a `TypeError`.
 
@@ -94,6 +90,8 @@ def to_datetime(t, tzinfo=None):
                     timedelta(seconds=frac + 1)
         else:
             dt = datetime.fromtimestamp(t, tz)
+    else:
+        dt = None
     if dt:
         return tz.normalize(dt)
     raise TypeError('expecting datetime, int, long, float, or None; got %s' %
@@ -255,11 +253,17 @@ def get_date_format_hint(locale=None):
     if babel and locale:
         format = get_date_format('medium', locale=locale)
         return format.pattern
+    return _libc_get_date_format_hint()
 
+def _libc_get_date_format_hint(format=None):
     t = datetime(1999, 10, 29, tzinfo=utc)
     tmpl = format_date(t, tzinfo=utc)
-    return tmpl.replace('1999', 'YYYY', 1).replace('99', 'YY', 1) \
-               .replace('10', 'MM', 1).replace('29', 'DD', 1)
+    units = [('1999', 'YYYY'), ('99', 'YY'), ('10', 'MM'), ('29', 'dd')]
+    if format:
+        units = [(unit[0], '%(' + unit[1] + ')s') for unit in units]
+    for unit in units:
+        tmpl = tmpl.replace(unit[0], unit[1], 1)
+    return tmpl
 
 def get_datetime_format_hint(locale=None):
     """Present the default format used by `format_datetime` in a human readable
@@ -275,16 +279,22 @@ def get_datetime_format_hint(locale=None):
         format = get_datetime_format('medium', locale=locale)
         return format.replace('{0}', time_pattern) \
                      .replace('{1}', date_pattern)
+    return _libc_get_datetime_format_hint()
 
+def _libc_get_datetime_format_hint(format=None):
     t = datetime(1999, 10, 29, 23, 59, 58, tzinfo=utc)
     tmpl = format_datetime(t, tzinfo=utc)
     ampm = format_time(t, '%p', tzinfo=utc)
+    units = []
     if ampm:
-        tmpl = tmpl.replace(ampm, 'a', 1)
-    return tmpl.replace('1999', 'YYYY', 1).replace('99', 'YY', 1) \
-               .replace('10', 'MM', 1).replace('29', 'DD', 1) \
-               .replace('23', 'hh', 1).replace('11', 'hh', 1) \
-               .replace('59', 'mm', 1).replace('58', 'ss', 1)
+        units.append((ampm, 'a'))
+    units.extend([('1999', 'YYYY'), ('99', 'YY'), ('10', 'MM'), ('29', 'dd'),
+                  ('23', 'hh'), ('11', 'hh'), ('59', 'mm'), ('58', 'ss')])
+    if format:
+        units = [(unit[0], '%(' + unit[1] + ')s') for unit in units]
+    for unit in units:
+        tmpl = tmpl.replace(unit[0], unit[1], 1)
+    return tmpl
 
 def get_month_names_jquery_ui(req):
     """Get the month names for the jQuery UI datepicker library"""
@@ -343,9 +353,9 @@ def get_date_format_jquery_ui(locale):
 def get_time_format_jquery_ui(locale):
     """Get the time format for the jQuery UI timepicker addon."""
     if locale == 'iso8601':
-        return 'hh:mm:ssz'  # XXX timepicker doesn't support 'ISO_8601'
+        return 'HH:mm:ssz'  # XXX timepicker doesn't support 'ISO_8601'
     if babel and locale:
-        values = {'h': 'h', 'hh': 'hh', 'H': 'h', 'HH': 'hh',
+        values = {'h': 'h', 'hh': 'hh', 'H': 'H', 'HH': 'HH',
                   'm': 'm', 'mm': 'mm', 's': 's', 'ss': 'ss',
                   'a': 'TT'}
         return get_time_format('medium', locale=locale).format % values
@@ -355,7 +365,7 @@ def get_time_format_jquery_ui(locale):
     ampm = format_time(t, '%p', tzinfo=utc)
     if ampm:
         tmpl = tmpl.replace(ampm, 'TT', 1)
-    return tmpl.replace('23', 'hh', 1).replace('11', 'hh', 1) \
+    return tmpl.replace('23', 'HH', 1).replace('11', 'hh', 1) \
                .replace('59', 'mm', 1).replace('58', 'ss', 1)
 
 def get_timezone_list_jquery_ui(t=None):
@@ -451,6 +461,21 @@ def _parse_date_iso8601(text, tzinfo):
 
     return None
 
+def _libc_parse_date(text, tzinfo):
+    for format in ('%x %X', '%x, %X', '%X %x', '%X, %x', '%x', '%c',
+                   '%b %d, %Y'):
+        try:
+            tm = time.strptime(text, format)
+            dt = tzinfo.localize(datetime(*tm[0:6]))
+            return tzinfo.normalize(dt)
+        except ValueError:
+            continue
+    try:
+        return _i18n_parse_date(text, tzinfo, None)
+    except ValueError:
+        pass
+    return
+
 def parse_date(text, tzinfo=None, locale=None, hint='date'):
     tzinfo = tzinfo or localtz
     text = text.strip()
@@ -460,25 +485,26 @@ def parse_date(text, tzinfo=None, locale=None, hint='date'):
         if babel and locale:
             dt = _i18n_parse_date(text, tzinfo, locale)
         else:
-            for format in ['%x %X', '%x, %X', '%X %x', '%X, %x', '%x', '%c',
-                           '%b %d, %Y']:
-                try:
-                    tm = time.strptime(text, format)
-                    dt = tzinfo.localize(datetime(*tm[0:6]))
-                    dt = tzinfo.normalize(dt)
-                    break
-                except ValueError:
-                    continue
+            dt = _libc_parse_date(text, tzinfo)
     if dt is None:
         dt = _parse_relative_time(text, tzinfo)
     if dt is None:
-        hint = {'datetime': get_datetime_format_hint,
-                'date': get_date_format_hint,
-                'relative': get_datetime_format_hint
-               }.get(hint, lambda(l): hint)(locale)
-        raise TracError(_('"%(date)s" is an invalid date, or the date format '
-                          'is not known. Try "%(hint)s" instead.',
-                          date=text, hint=hint), _('Invalid Date'))
+        formatted_hint = {
+            'datetime': get_datetime_format_hint,
+            'date': get_date_format_hint,
+            'relative': get_datetime_format_hint,
+            'iso8601': lambda l: get_datetime_format_hint('iso8601'),
+        }.get(hint, lambda(l): hint)(locale)
+        if hint != 'iso8601':
+            msg = _('"%(date)s" is an invalid date, or the date format '
+                    'is not known. Try "%(hint)s" or "%(isohint)s" instead.',
+                    date=text, hint=formatted_hint,
+                    isohint=get_datetime_format_hint('iso8601'))
+        else:
+            msg = _('"%(date)s" is an invalid date, or the date format '
+                    'is not known. Try "%(hint)s" instead.',
+                    date=text, hint=formatted_hint)
+        raise TracError(msg, _('Invalid Date'))
     # Make sure we can convert it to a timestamp and back - fromtimestamp()
     # may raise ValueError if larger than platform C localtime() or gmtime()
     try:
@@ -498,15 +524,17 @@ def _i18n_parse_date_pattern(locale):
         'm': ('m',),
         's': ('s',),
     }
-    regexp = [r'[0-9]+']
 
-    date_format = get_date_format('medium', locale=locale)
-    time_format = get_time_format('medium', locale=locale)
-    datetime_format = get_datetime_format('medium', locale=locale)
-    formats = (
-        datetime_format.replace('{0}', time_format.format) \
-                       .replace('{1}', date_format.format),
-        date_format.format)
+    if locale is None:
+        formats = (_libc_get_datetime_format_hint(format=True),
+                   _libc_get_date_format_hint(format=True))
+    else:
+        date_format = get_date_format('medium', locale=locale)
+        time_format = get_time_format('medium', locale=locale)
+        datetime_format = get_datetime_format('medium', locale=locale)
+        formats = (datetime_format.replace('{0}', time_format.format) \
+                                  .replace('{1}', date_format.format),
+                   date_format.format)
 
     orders = []
     for format in formats:
@@ -518,48 +546,64 @@ def _i18n_parse_date_pattern(locale):
                     order.append((idx, key))
                     break
         order.sort()
-        order = dict((key, idx) for idx, (_, key) in enumerate(order))
-        orders.append(order)
+        orders.append(dict((key, idx) for idx, (_, key) in enumerate(order)))
 
-    month_names = {
-        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
-    }
-    if formats[0].find('%(MMM)s') != -1:
-        for width in ('wide', 'abbreviated'):
-            names = get_month_names(width, locale=locale)
-            for num, name in names.iteritems():
-                name = name.lower()
-                month_names[name] = num
-    regexp.extend(month_names.iterkeys())
-
+    # always allow using English names regardless of locale
+    month_names = dict(zip(('jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                            'jul', 'aug', 'sep', 'oct', 'nov', 'dec',),
+                           xrange(1, 13)))
     period_names = {'am': 'am', 'pm': 'pm'}
-    if formats[0].find('%(a)s') != -1:
-        names = get_period_names(locale=locale)
-        for period, name in names.iteritems():
-            name = name.lower()
-            period_names[name] = period
-    regexp.extend(period_names.iterkeys())
+
+    if locale is None:
+        for num in xrange(1, 13):
+            t = datetime(1999, num, 1, tzinfo=utc)
+            names = format_date(t, '%b\t%B', utc).split('\t')
+            month_names.update((name.lower(), num) for name in names
+                               if str(num) not in name)
+        for num, period in ((11, 'am'), (23, 'pm')):
+            t = datetime(1999, 1, 1, num, tzinfo=utc)
+            name = format_datetime(t, '%p', utc)
+            if name:
+                period_names[name.lower()] = period
+    else:
+        if formats[0].find('%(MMM)s') != -1:
+            for width in ('wide', 'abbreviated'):
+                names = get_month_names(width, locale=locale)
+                month_names.update((name.lower(), num)
+                                   for num, name in names.iteritems())
+        if formats[0].find('%(a)s') != -1:
+            names = get_period_names(locale=locale)
+            period_names.update((name.lower(), period)
+                                for period, name in names.iteritems()
+                                if period in ('am', 'pm'))
+
+    regexp = ['[0-9]+']
+    regexp.extend(re.escape(name) for name in month_names)
+    regexp.extend(re.escape(name) for name in period_names)
 
     return {
         'orders': orders,
-        'regexp': re.compile('(%s)' % '|'.join(regexp),
-                             re.IGNORECASE | re.UNICODE),
+        'regexp': re.compile('(%s)' % '|'.join(regexp), re.IGNORECASE),
         'month_names': month_names,
         'period_names': period_names,
     }
 
-_I18N_PARSE_DATE_PATTERNS = dict((l, False) for l in get_known_locales())
+_I18N_PARSE_DATE_PATTERNS = {}
+_I18N_PARSE_DATE_PATTERNS_LIBC = {}
 
 def _i18n_parse_date(text, tzinfo, locale):
-    locale = Locale.parse(locale)
-    key = str(locale)
-    pattern = _I18N_PARSE_DATE_PATTERNS.get(key)
-    if pattern is False:
-        pattern = _i18n_parse_date_pattern(locale)
-        _I18N_PARSE_DATE_PATTERNS[key] = pattern
+    if locale is None:
+        key = getlocale(LC_TIME)[0]
+        patterns = _I18N_PARSE_DATE_PATTERNS_LIBC
+    else:
+        locale = Locale.parse(locale)
+        key = str(locale)
+        patterns = _I18N_PARSE_DATE_PATTERNS
+
+    pattern = patterns.get(key)
     if pattern is None:
-        return None
+        pattern = _i18n_parse_date_pattern(locale)
+        patterns[key] = pattern
 
     regexp = pattern['regexp']
     period_names = pattern['period_names']

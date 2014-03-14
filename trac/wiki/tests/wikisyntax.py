@@ -1,4 +1,15 @@
 # -*- coding: utf-8 -*-
+#
+# Copyright (C) 2006-2013 Edgewall Software
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://trac.edgewall.org/wiki/TracLicense.
+#
+# This software consists of voluntary contributions made by many
+# individuals. For the exact contribution history, see the revision
+# history and logs, available at http://trac.edgewall.org/log/.
 
 from datetime import datetime
 import unittest
@@ -710,6 +721,8 @@ nolink          http://noweb
     w.name = 'FirstLevel/SecondLevel/OtherThirdLevel'
     w.text = '--'
     w.save('joe', 'other third level of hierarchy', '::1', now)
+
+    tc.env.db_transaction("INSERT INTO ticket (id) VALUES ('123')")
 
 
 def wiki_teardown(tc):

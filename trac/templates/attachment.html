@@ -31,7 +31,7 @@
           <div class="field">
             <label>File<py:if test="max_size >= 0">
               <i18n:msg params="value">(size limit ${pretty_size(max_size)})</i18n:msg></py:if>:<br />
-              <input type="file" name="attachment" /></label>
+              <input type="file" name="attachment" class="trac-disable-determinant" /></label>
           </div>
           <fieldset>
             <legend>Attachment Info</legend>
@@ -59,7 +59,7 @@
             <input type="hidden" name="action" value="new" />
             <input type="hidden" name="realm" value="$parent.realm" />
             <input type="hidden" name="id" value="$parent.id" />
-            <input type="submit" value="${_('Add attachment')}" />
+            <input type="submit" class="trac-disable trac-disable-on-submit" value="${_('Add attachment')}" />
             <input type="submit" name="cancel" value="${_('Cancel')}" />
           </div>
         </form>
@@ -73,8 +73,8 @@
           <form method="post" action="">
             <div id="delete">
               <input type="hidden" name="action" value="delete" />
+              <input type="submit" class="trac-disable-on-submit" value="${_('Delete attachment')}" />
               <input type="submit" name="cancel" value="${_('Cancel')}" />
-              <input type="submit" value="${_('Delete attachment')}" />
             </div>
           </form>
         </div>
@@ -83,7 +83,6 @@
       <py:when test="'list'">
         <h1><a href="${url_of(parent)}">${name_of(parent)}</a></h1>
         <py:with vars="context = context.child(parent)">
-          <?python add_button_title = _('Attach another file') ?>
           <xi:include href="list_of_attachments.html" py:with="alist = attachments"/>
         </py:with>
       </py:when>

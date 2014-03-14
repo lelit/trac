@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C)2005-2009 Edgewall Software
+# Copyright (C) 2005-2013 Edgewall Software
 # Copyright (C) 2005 Christopher Lenz <cmlenz@gmx.de>
 # All rights reserved.
 #
@@ -31,6 +31,7 @@ except ImportError:
     has_svn = False
 
 from trac.test import EnvironmentStub, TestSetup
+from trac.tests import compat
 from trac.core import TracError
 from trac.resource import Resource, resource_exists
 from trac.util.concurrency import get_thread_id
@@ -41,9 +42,12 @@ from tracopt.versioncontrol.svn import svn_fs
 
 REPOS_PATH = os.path.join(tempfile.gettempdir(), 'trac-svnrepos')
 REPOS_NAME = 'repo'
+URL = 'svn://test'
 
-HEAD = 22
-TETE = 21
+HEAD = 28
+TETE = 26
+
+NATIVE_EOL = '\r\n' if os.name == 'nt' else '\n'
 
 
 class SubversionRepositoryTestSetup(TestSetup):
@@ -85,14 +89,14 @@ class NormalTests(object):
 
     def test_resource_exists(self):
         repos = Resource('repository', REPOS_NAME)
-        self.assertEqual(True, resource_exists(self.env, repos))
-        self.assertEqual(False, resource_exists(self.env, repos(id='xxx')))
+        self.assertTrue(resource_exists(self.env, repos))
+        self.assertFalse(resource_exists(self.env, repos(id='xxx')))
         node = repos.child('source', u'tête')
-        self.assertEqual(True, resource_exists(self.env, node))
-        self.assertEqual(False, resource_exists(self.env, node(id='xxx')))
+        self.assertTrue(resource_exists(self.env, node))
+        self.assertFalse(resource_exists(self.env, node(id='xxx')))
         cset = repos.child('changeset', HEAD)
-        self.assertEqual(True, resource_exists(self.env, cset))
-        self.assertEqual(False, resource_exists(self.env, cset(id=123456)))
+        self.assertTrue(resource_exists(self.env, cset))
+        self.assertFalse(resource_exists(self.env, cset(id=123456)))
 
     def test_repos_normalize_path(self):
         self.assertEqual('/', self.repos.normalize_path('/'))
@@ -115,33 +119,32 @@ class NormalTests(object):
 
     def test_rev_navigation(self):
         self.assertEqual(1, self.repos.oldest_rev)
-        self.assertEqual(None, self.repos.previous_rev(0))
-        self.assertEqual(None, self.repos.previous_rev(1))
+        self.assertIsNone(self.repos.previous_rev(0))
+        self.assertIsNone(self.repos.previous_rev(1))
         self.assertEqual(HEAD, self.repos.youngest_rev)
         self.assertEqual(6, self.repos.next_rev(5))
         self.assertEqual(7, self.repos.next_rev(6))
         # ...
-        self.assertEqual(None, self.repos.next_rev(HEAD))
+        self.assertIsNone(self.repos.next_rev(HEAD))
         self.assertRaises(NoSuchChangeset, self.repos.normalize_rev, HEAD + 1)
 
     def test_rev_path_navigation(self):
         self.assertEqual(1, self.repos.oldest_rev)
-        self.assertEqual(None, self.repos.previous_rev(0, u'tête'))
-        self.assertEqual(None, self.repos.previous_rev(1, u'tête'))
+        self.assertIsNone(self.repos.previous_rev(0, u'tête'))
+        self.assertIsNone(self.repos.previous_rev(1, u'tête'))
         self.assertEqual(HEAD, self.repos.youngest_rev)
         self.assertEqual(6, self.repos.next_rev(5, u'tête'))
         self.assertEqual(13, self.repos.next_rev(6, u'tête'))
         # ...
-        self.assertEqual(None, self.repos.next_rev(HEAD, u'tête'))
+        self.assertIsNone(self.repos.next_rev(HEAD, u'tête'))
         # test accentuated characters
-        self.assertEqual(None,
-                         self.repos.previous_rev(17, u'tête/R\xe9sum\xe9.txt'))
+        self.assertIsNone(self.repos.previous_rev(17, u'tête/R\xe9sum\xe9.txt'))
         self.assertEqual(17, self.repos.next_rev(16, u'tête/R\xe9sum\xe9.txt'))
 
     def test_has_node(self):
-        self.assertEqual(False, self.repos.has_node(u'/tête/dir1', 3))
-        self.assertEqual(True, self.repos.has_node(u'/tête/dir1', 4))
-        self.assertEqual(True, self.repos.has_node(u'/tête/dir1'))
+        self.assertFalse(self.repos.has_node(u'/tête/dir1', 3))
+        self.assertTrue(self.repos.has_node(u'/tête/dir1', 4))
+        self.assertTrue(self.repos.has_node(u'/tête/dir1'))
 
     def test_get_node(self):
         node = self.repos.get_node(u'/tête')
@@ -150,7 +153,7 @@ class NormalTests(object):
         self.assertEqual(Node.DIRECTORY, node.kind)
         self.assertEqual(HEAD, node.rev)
         self.assertEqual(TETE, node.created_rev)
-        self.assertEqual(datetime(2007, 4, 30, 17, 45, 26, 234375, utc),
+        self.assertEqual(datetime(2013, 4, 28, 5, 36, 6, 29637, utc),
                          node.last_modified)
         node = self.repos.get_node(u'/tête/README.txt')
         self.assertEqual('README.txt', node.name)
@@ -195,9 +198,9 @@ class NormalTests(object):
 
     def test_get_dir_content(self):
         node = self.repos.get_node(u'/tête')
-        self.assertEqual(None, node.content_length)
-        self.assertEqual(None, node.content_type)
-        self.assertEqual(None, node.get_content())
+        self.assertIsNone(node.content_length)
+        self.assertIsNone(node.content_type)
+        self.assertIsNone(node.get_content())
 
     def test_get_file_content(self):
         node = self.repos.get_node(u'/tête/README.txt')
@@ -216,6 +219,141 @@ class NormalTests(object):
         self.assertEqual('native', props['svn:eol-style'])
         self.assertEqual('text/plain', props['svn:mime-type'])
 
+    def test_get_file_content_without_native_eol_style(self):
+        f = self.repos.get_node(u'/tête/README.txt', 2)
+        props = f.get_properties()
+        self.assertIsNone(props.get('svn:eol-style'))
+        self.assertEqual('A text.\n', f.get_content().read())
+        self.assertEqual('A text.\n', f.get_processed_content().read())
+
+    def test_get_file_content_with_native_eol_style(self):
+        f = self.repos.get_node(u'/tête/README.txt', 3)
+        props = f.get_properties()
+        self.assertEqual('native', props.get('svn:eol-style'))
+
+        self.repos.params['eol_style'] = 'native'
+        self.assertEqual('A test.\n', f.get_content().read())
+        self.assertEqual('A test.' + NATIVE_EOL,
+                         f.get_processed_content().read())
+
+        self.repos.params['eol_style'] = 'LF'
+        self.assertEqual('A test.\n', f.get_content().read())
+        self.assertEqual('A test.\n', f.get_processed_content().read())
+
+        self.repos.params['eol_style'] = 'CRLF'
+        self.assertEqual('A test.\n', f.get_content().read())
+        self.assertEqual('A test.\r\n', f.get_processed_content().read())
+
+        self.repos.params['eol_style'] = 'CR'
+        self.assertEqual('A test.\n', f.get_content().read())
+        self.assertEqual('A test.\r', f.get_processed_content().read())
+        # check that the hint is stronger than the repos default
+        self.assertEqual('A test.\r\n',
+                         f.get_processed_content(eol_hint='CRLF').read())
+
+    def test_get_file_content_with_native_eol_style_and_no_keywords_28(self):
+        f = self.repos.get_node(u'/branches/v4/README.txt', 28)
+        props = f.get_properties()
+        self.assertEqual('native', props.get('svn:eol-style'))
+        self.assertIsNone(props.get('svn:keywords'))
+
+        self.assertEqual(
+            'A test.\n' +
+            '# $Rev$ is not substituted with no svn:keywords.\n',
+            f.get_content().read())
+        self.assertEqual(
+            'A test.\r\n' +
+            '# $Rev$ is not substituted with no svn:keywords.\r\n',
+            f.get_processed_content(eol_hint='CRLF').read())
+
+    def test_get_file_content_with_keyword_substitution_23(self):
+        f = self.repos.get_node(u'/tête/Résumé.txt', 23)
+        props = f.get_properties()
+        self.assertEqual('Revision Author URL', props['svn:keywords'])
+        self.assertEqual('''\
+# Simple test for svn:keywords property substitution (#717)
+# $Rev: 23 $:     Revision of last commit
+# $Author: cboos $:  Author of last commit
+# $Date$:    Date of last commit (not substituted)
+
+Now with fixed width fields:
+# $URL:: svn://test/tête/Résumé.txt                $ the configured URL
+# $HeadURL:: svn://test/tête/Résumé.txt            $ same
+# $URL:: svn://test/tê#$ same, but truncated
+
+En r\xe9sum\xe9 ... \xe7a marche.
+''', f.get_processed_content().read())
+    # Note: "En résumé ... ça marche." in the content is really encoded in
+    #       latin1 in the file, and our substitutions are UTF-8 encoded...
+    #       This is expected.
+
+    def test_get_file_content_with_keyword_substitution_24(self):
+        f = self.repos.get_node(u'/tête/Résumé.txt', 24)
+        props = f.get_properties()
+        self.assertEqual('Revision Author URL Id', props['svn:keywords'])
+        self.assertEqual('''\
+# Simple test for svn:keywords property substitution (#717)
+# $Rev: 24 $:     Revision of last commit
+# $Author: cboos $:  Author of last commit
+# $Date$:    Date of last commit (now substituted)
+# $Id: Résumé.txt 24 2013-04-27 14:38:50Z cboos $:      Combination
+
+Now with fixed width fields:
+# $URL:: svn://test/t\xc3\xaate/R\xc3\xa9sum\xc3\xa9.txt                $ the configured URL
+# $HeadURL:: svn://test/t\xc3\xaate/R\xc3\xa9sum\xc3\xa9.txt            $ same
+# $URL:: svn://test/t\xc3\xaa#$ same, but truncated
+# $Header::                                           $ combination with URL
+
+En r\xe9sum\xe9 ... \xe7a marche.
+''', f.get_processed_content().read())
+
+    def test_get_file_content_with_keyword_substitution_25(self):
+        f = self.repos.get_node(u'/tête/Résumé.txt', 25)
+        props = f.get_properties()
+        self.assertEqual('Revision Author URL Date Id Header',
+                         props['svn:keywords'])
+        self.assertEqual('''\
+# Simple test for svn:keywords property substitution (#717)
+# $Rev: 25 $:     Revision of last commit
+# $Author: cboos $:  Author of last commit
+# $Date: 2013-04-27 14:43:15 +0000 (Sat, 27 Apr 2013) $:    Date of last commit (now really substituted)
+# $Id: Résumé.txt 25 2013-04-27 14:43:15Z cboos $:      Combination
+
+Now with fixed width fields:
+# $URL:: svn://test/tête/Résumé.txt                $ the configured URL
+# $HeadURL:: svn://test/tête/Résumé.txt            $ same
+# $URL:: svn://test/tê#$ same, but truncated
+# $Header:: svn://test/t\xc3\xaate/R\xc3\xa9sum\xc3\xa9.txt 25 2013-04-#$ combination with URL
+
+En r\xe9sum\xe9 ... \xe7a marche.
+''', f.get_processed_content().read())
+
+    def test_get_file_content_with_keyword_substitution_27(self):
+        f = self.repos.get_node(u'/tête/Résumé.txt', 27)
+        props = f.get_properties()
+        self.assertEqual('Revision Author URL Date Id Header',
+                         props['svn:keywords'])
+        self.assertEqual('''\
+# Simple test for svn:keywords property substitution (#717)
+# $Rev: 26 $:     Revision of last commit
+# $Author: jomae $:  Author of last commit
+# $Date: 2013-04-28 05:36:06 +0000 (Sun, 28 Apr 2013) $:    Date of last commit (now really substituted)
+# $Id: Résumé.txt 26 2013-04-28 05:36:06Z jomae $:      Combination
+
+Now with fixed width fields:
+# $URL:: svn://test/tête/Résumé.txt                $ the configured URL
+# $HeadURL:: svn://test/tête/Résumé.txt            $ same
+# $URL:: svn://test/tê#$ same, but truncated
+# $Header:: svn://test/t\xc3\xaate/R\xc3\xa9sum\xc3\xa9.txt 26 2013-04-#$ combination with URL
+
+Overlapped keywords:
+# $Xxx$Rev: 26 $Xxx$
+# $Rev: 26 $Xxx$Rev: 26 $
+# $Rev: 26 $Rev$Rev: 26 $
+
+En r\xe9sum\xe9 ... \xe7a marche.
+''', f.get_processed_content().read())
+
     def test_created_path_rev(self):
         node = self.repos.get_node(u'/tête/README3.txt', 15)
         self.assertEqual(15, node.rev)
@@ -233,8 +371,9 @@ class NormalTests(object):
     def test_get_annotations(self):
         # svn_client_blame2() requires a canonical uri since Subversion 1.7.
         # If the uri is not canonical, assertion raises (#11167).
-        node = self.repos.get_node(u'/tête/R\xe9sum\xe9.txt')
-        self.assertEqual([20], node.get_annotations())
+        node = self.repos.get_node(u'/tête/R\xe9sum\xe9.txt', 25)
+        self.assertEqual([23, 23, 23, 25, 24, 23, 23, 23, 23, 23, 24, 23, 20],
+                         node.get_annotations())
 
     def test_get_annotations_lower_drive_letter(self):
         # If the drive letter in the uri is lower case on Windows, a
@@ -244,8 +383,9 @@ class NormalTests(object):
         DbRepositoryProvider(self.env).add_repository('lowercase', repos_path,
                                                       'direct-svnfs')
         repos = self.env.get_repository('lowercase')
-        node = repos.get_node(u'/tête/R\xe9sum\xe9.txt')
-        self.assertEqual([20], node.get_annotations())
+        node = repos.get_node(u'/tête/R\xe9sum\xe9.txt', 25)
+        self.assertEqual([23, 23, 23, 25, 24, 23, 23, 23, 23, 23, 24, 23, 20],
+                         node.get_annotations())
 
     if os.name != 'nt':
         del test_get_annotations_lower_drive_letter
@@ -591,17 +731,17 @@ class ScopedTests(object):
 
     def test_rev_navigation(self):
         self.assertEqual(1, self.repos.oldest_rev)
-        self.assertEqual(None, self.repos.previous_rev(0))
+        self.assertIsNone(self.repos.previous_rev(0))
         self.assertEqual(1, self.repos.previous_rev(2))
         self.assertEqual(TETE, self.repos.youngest_rev)
         self.assertEqual(2, self.repos.next_rev(1))
         self.assertEqual(3, self.repos.next_rev(2))
         # ...
-        self.assertEqual(None, self.repos.next_rev(TETE))
+        self.assertIsNone(self.repos.next_rev(TETE))
 
     def test_has_node(self):
-        self.assertEqual(False, self.repos.has_node('/dir1', 3))
-        self.assertEqual(True, self.repos.has_node('/dir1', 4))
+        self.assertFalse(self.repos.has_node('/dir1', 3))
+        self.assertTrue(self.repos.has_node('/dir1', 4))
 
     def test_get_node(self):
         node = self.repos.get_node('/dir1')
@@ -655,9 +795,9 @@ class ScopedTests(object):
 
     def test_get_dir_content(self):
         node = self.repos.get_node('/dir1')
-        self.assertEqual(None, node.content_length)
-        self.assertEqual(None, node.content_type)
-        self.assertEqual(None, node.get_content())
+        self.assertIsNone(node.content_length)
+        self.assertIsNone(node.content_type)
+        self.assertIsNone(node.get_content())
 
     def test_get_file_content(self):
         node = self.repos.get_node('/README.txt')
@@ -838,14 +978,14 @@ class ScopedTests(object):
 class RecentPathScopedTests(object):
 
     def test_rev_navigation(self):
-        self.assertEqual(False, self.repos.has_node('/', 1))
-        self.assertEqual(False, self.repos.has_node('/', 2))
-        self.assertEqual(False, self.repos.has_node('/', 3))
-        self.assertEqual(True, self.repos.has_node('/', 4))
+        self.assertFalse(self.repos.has_node('/', 1))
+        self.assertFalse(self.repos.has_node('/', 2))
+        self.assertFalse(self.repos.has_node('/', 3))
+        self.assertTrue(self.repos.has_node('/', 4))
         # We can't make this work anymore because of #5213.
         # self.assertEqual(4, self.repos.oldest_rev)
         self.assertEqual(1, self.repos.oldest_rev) # should really be 4...
-        self.assertEqual(None, self.repos.previous_rev(4))
+        self.assertIsNone(self.repos.previous_rev(4))
 
 
 class NonSelfContainedScopedTests(object):
@@ -877,9 +1017,11 @@ class SubversionRepositoryTestCase(unittest.TestCase):
     def setUp(self):
         self.env = EnvironmentStub()
         repositories = self.env.config['repositories']
-        DbRepositoryProvider(self.env).add_repository(REPOS_NAME, self.path,
-                                                      'direct-svnfs')
+        dbprovider = DbRepositoryProvider(self.env)
+        dbprovider.add_repository(REPOS_NAME, self.path, 'direct-svnfs')
+        dbprovider.modify_repository(REPOS_NAME, {'url': URL})
         self.repos = self.env.get_repository(REPOS_NAME)
+
 
     def tearDown(self):
         self.env.reset_db()
@@ -894,8 +1036,9 @@ class SvnCachedRepositoryTestCase(unittest.TestCase):
 
     def setUp(self):
         self.env = EnvironmentStub()
-        DbRepositoryProvider(self.env).add_repository(REPOS_NAME, self.path,
-                                                      'svn')
+        dbprovider = DbRepositoryProvider(self.env)
+        dbprovider.add_repository(REPOS_NAME, self.path, 'svn')
+        dbprovider.modify_repository(REPOS_NAME, {'url': URL})
         self.repos = self.env.get_repository(REPOS_NAME)
         self.repos.sync()
 
@@ -942,5 +1085,4 @@ def suite():
     return suite
 
 if __name__ == '__main__':
-    runner = unittest.TextTestRunner()
-    runner.run(suite())
+    unittest.main(defaultTest='suite')

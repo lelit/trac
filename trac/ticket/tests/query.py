@@ -1,3 +1,16 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2004-2013 Edgewall Software
+# All rights reserved.
+#
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://trac.edgewall.org/wiki/TracLicense.
+#
+# This software consists of voluntary contributions made by many
+# individuals. For the exact contribution history, see the revision
+# history and logs, available at http://trac.edgewall.org/log/.
+
 from trac.test import Mock, EnvironmentStub, MockPerm, locale_en
 from trac.ticket.model import Ticket
 from trac.ticket.query import Query, QueryModule, TicketQueryMacro
@@ -258,13 +271,13 @@ ORDER BY COALESCE(t.id,0)=0,t.id""" % {'like': self.env.get_read_db().like()})
         sql, args = query.get_sql()
         foo = self.env.get_read_db().quote('foo')
         self.assertEqualSQL(sql,
-"""SELECT t.id AS id,t.summary AS summary,t.owner AS owner,t.type AS type,t.status AS status,t.priority AS priority,t.milestone AS milestone,t.time AS time,t.changetime AS changetime,priority.value AS priority_value,c.%s AS %s
-FROM ticket AS t
-  LEFT JOIN (SELECT id AS ticket,
-    (SELECT c.value FROM ticket_custom c WHERE c.ticket=t.id AND c.name='foo') AS %s
-    FROM ticket t) AS c ON (c.ticket=t.id)
+"""SELECT t.id AS id,t.summary AS summary,t.owner AS owner,t.type AS type,t.status AS status,t.priority AS priority,t.milestone AS milestone,t.time AS time,t.changetime AS changetime,priority.value AS priority_value,t.%s AS %s
+FROM (
+  SELECT t.id AS id,t.summary AS summary,t.owner AS owner,t.type AS type,t.status AS status,t.priority AS priority,t.milestone AS milestone,t.time AS time,t.changetime AS changetime,
+  (SELECT c.value FROM ticket_custom c WHERE c.ticket=t.id AND c.name='foo') AS %s
+  FROM ticket AS t) AS t
   LEFT OUTER JOIN enum AS priority ON (priority.type='priority' AND priority.name=priority)
-WHERE ((COALESCE(c.%s,'')=%%s))
+WHERE ((COALESCE(t.%s,'')=%%s))
 ORDER BY COALESCE(t.id,0)=0,t.id""" % ((foo,) * 4))
         self.assertEqual(['something'], args)
         tickets = query.execute(self.req)
@@ -275,13 +288,13 @@ ORDER BY COALESCE(t.id,0)=0,t.id""" % ((foo,) * 4))
         sql, args = query.get_sql()
         foo = self.env.get_read_db().quote('foo')
         self.assertEqualSQL(sql,
-"""SELECT t.id AS id,t.summary AS summary,t.owner AS owner,t.type AS type,t.status AS status,t.priority AS priority,t.milestone AS milestone,t.time AS time,t.changetime AS changetime,priority.value AS priority_value,c.%s AS %s
-FROM ticket AS t
-  LEFT JOIN (SELECT id AS ticket,
-    (SELECT c.value FROM ticket_custom c WHERE c.ticket=t.id AND c.name='foo') AS %s
-    FROM ticket t) AS c ON (c.ticket=t.id)
+"""SELECT t.id AS id,t.summary AS summary,t.owner AS owner,t.type AS type,t.status AS status,t.priority AS priority,t.milestone AS milestone,t.time AS time,t.changetime AS changetime,priority.value AS priority_value,t.%s AS %s
+FROM (
+  SELECT t.id AS id,t.summary AS summary,t.owner AS owner,t.type AS type,t.status AS status,t.priority AS priority,t.milestone AS milestone,t.time AS time,t.changetime AS changetime,
+  (SELECT c.value FROM ticket_custom c WHERE c.ticket=t.id AND c.name='foo') AS %s
+  FROM ticket AS t) AS t
   LEFT OUTER JOIN enum AS priority ON (priority.type='priority' AND priority.name=priority)
-ORDER BY COALESCE(c.%s,'')='',c.%s,COALESCE(t.id,0)=0,t.id""" %
+ORDER BY COALESCE(t.%s,'')='',t.%s,COALESCE(t.id,0)=0,t.id""" %
         ((foo,) * 5))
         self.assertEqual([], args)
         tickets = query.execute(self.req)
@@ -644,9 +657,9 @@ class TicketQueryMacroTestCase(unittest.TestCase):
 
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(QueryTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(QueryLinksTestCase, 'test'))
-    suite.addTest(unittest.makeSuite(TicketQueryMacroTestCase, 'test'))
+    suite.addTest(unittest.makeSuite(QueryTestCase))
+    suite.addTest(unittest.makeSuite(QueryLinksTestCase))
+    suite.addTest(unittest.makeSuite(TicketQueryMacroTestCase))
     return suite
 
 if __name__ == '__main__':

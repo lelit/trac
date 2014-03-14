@@ -95,10 +95,11 @@
           <strong>This is an irreversible operation.</strong>
         </p>
         <div class="buttons">
+          <input type="submit" class="trac-disable-on-submit"
+                 value="${what == 'multiple' and _('Delete those versions')
+                                   or what == 'single' and _('Delete this version')
+                                   or _('Delete page')}" />
           <input type="submit" name="cancel" value="${_('Cancel')}" />
-          <input type="submit" value="${what == 'multiple' and _('Delete those versions')
-                                        or what == 'single' and _('Delete this version')
-                                        or _('Delete page')}" />
         </div>
       </form>
     </div>

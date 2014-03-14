@@ -20,7 +20,7 @@
           The complete history of the page will be moved to the new location.
         </p>
         <div class="field">
-          <label>New name: <input type="text" name="new_name" size="40" value="$new_name"/></label>
+          <label>New name: <input type="text" name="new_name" class="trac-autofocus" size="40" value="$new_name"/></label>
         </div>
         <div class="field">
           <label>
@@ -29,8 +29,8 @@
           </label>
         </div>
         <div class="buttons">
+          <input type="submit" name="submit" class="trac-disable-on-submit" value="${_('Rename page')}"/>
           <input type="submit" name="cancel" value="${_('Cancel')}"/>
-          <input type="submit" name="submit" value="${_('Rename page')}"/>
         </div>
       </form>
     </div>

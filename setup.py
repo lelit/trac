@@ -18,10 +18,10 @@ from setuptools import setup, find_packages
 
 min_python = (2, 5)
 if sys.version_info < min_python:
-    print "Trac requires Python %d.%d or later" % min_python
+    print("Trac requires Python %d.%d or later" % min_python)
     sys.exit(1)
 if sys.version_info >= (3,):
-    print "Trac doesn't support Python 3 (yet)"
+    print("Trac doesn't support Python 3 (yet)")
     sys.exit(1)
 
 extra = {}
@@ -49,7 +49,7 @@ except ImportError:
 try:
     import genshi
 except ImportError:
-    print "Genshi is needed by Trac setup, pre-installing"
+    print("Genshi is needed by Trac setup, pre-installing")
     # give some context to the warnings we might get when installing Genshi
 
 
@@ -104,6 +104,7 @@ facilities.
     ],
     extras_require = {
         'Babel': ['Babel>=0.9.5'],
+        'ConfigObj': ['ConfigObj'],
         'Pygments': ['Pygments>=0.6'],
         'reST': ['docutils>=0.3'],
         'SilverCity': ['SilverCity>=0.9.4'],
@@ -149,7 +150,7 @@ facilities.
         tracopt.mimeview.enscript = tracopt.mimeview.enscript
         tracopt.mimeview.php = tracopt.mimeview.php
         tracopt.mimeview.silvercity = tracopt.mimeview.silvercity[SilverCity]
-        tracopt.perm.authz_policy = tracopt.perm.authz_policy
+        tracopt.perm.authz_policy = tracopt.perm.authz_policy[ConfigObj]
         tracopt.perm.config_perm_provider = tracopt.perm.config_perm_provider
         tracopt.ticket.clone = tracopt.ticket.clone
         tracopt.ticket.commit_updater = tracopt.ticket.commit_updater

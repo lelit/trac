@@ -26,7 +26,8 @@
         </label>
         <input type="checkbox" name="sidebyside" id="sidebyside" checked="$sidebyside" />
       </div>
-      <p><textarea id="text" class="wikitext${' trac-resizable' if not sidebyside else None}"
+      <p><textarea id="text" class="${classes('wikitext', 'trac-autofocus',
+                                              'trac-resizable' if not sidebyside else None)}"
                    name="text" cols="80" rows="$edit_rows">
 $page.text</textarea>
       </p>
@@ -43,7 +44,7 @@ $page.text</textarea>
             <input id="author" type="text" name="author" size="30" value="$author" />
           </label>
           <p py:if="author == 'anonymous'" class="hint">
-            <i18n:msg>E-mail address and user name can be saved in the <a href="${href.prefs()}">Preferences</a>.</i18n:msg>
+            <i18n:msg>E-mail address and user name can be saved in the <a href="${href.prefs()}" class="trac-target-new">Preferences</a>.</i18n:msg>
           </p>
         </div>
         <div class="field">
@@ -52,7 +53,8 @@ $page.text</textarea>
           </label>
         </div>
       </div>
-      <div py:if="'WIKI_ADMIN' in perm(page.resource)" id="changeinfo2" class="options">
+      <div py:if="show_readonly_checkbox and 'WIKI_ADMIN' in perm(page.resource)"
+           id="changeinfo2" class="options">
         <label><input type="checkbox" name="readonly" id="readonly"
                       checked="${page.readonly or None}" />
           Page is read-only
@@ -68,7 +70,7 @@ $page.text</textarea>
       <py:otherwise>
         <input type="submit" name="preview" value="${_('Preview Page')}" accesskey="p" />&nbsp;
         <input type="submit" name="diff" value="${_('Review Changes')}" accesskey="r" />&nbsp;
-        <input type="submit" id="save" name="save" value="${_('Submit changes')}" />&nbsp;
+        <input type="submit" id="save" name="save" class="trac-disable-on-submit" value="${_('Submit changes')}" />&nbsp;
       </py:otherwise>
       <input type="submit" name="cancel" value="${_('Cancel')}" />
     </div>

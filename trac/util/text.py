@@ -61,6 +61,13 @@ def to_unicode(text, charset=None):
         except UnicodeDecodeError:
             return unicode(text, 'latin1')
     elif isinstance(text, Exception):
+        if os.name == 'nt' and isinstance(text, (OSError, IOError)):
+            # the exception might have a localized error string encoded with
+            # ANSI codepage if OSError and IOError on Windows
+            try:
+                return unicode(str(text), 'mbcs')
+            except UnicodeError:
+                pass
         # two possibilities for storing unicode strings in exception data:
         try:
             # custom __str__ method on the exception (e.g. PermissionError)
@@ -131,10 +138,10 @@ def strip_line_ws(text, leading=True, trailing=True):
 
 _js_quote = {'\\': '\\\\', '"': '\\"', '\b': '\\b', '\f': '\\f',
              '\n': '\\n', '\r': '\\r', '\t': '\\t', "'": "\\'"}
-for i in range(0x20) + [ord(c) for c in '&<>']:
-    _js_quote.setdefault(chr(i), '\\u%04x' % i)
-_js_quote_re = re.compile(r'[\x00-\x1f\\"\b\f\n\r\t\'&<>]')
-_js_string_re = re.compile(r'[\x00-\x1f\\"\b\f\n\r\t&<>]')
+for i in range(0x20) + [ord(c) for c in u'&<>\u2028\u2029']:
+    _js_quote.setdefault(unichr(i), '\\u%04x' % i)
+_js_quote_re = re.compile(ur'[\x00-\x1f\\"\b\f\n\r\t\'&<>\u2028\u2029]')
+_js_string_re = re.compile(ur'[\x00-\x1f\\"\b\f\n\r\t&<>\u2028\u2029]')
 
 
 def javascript_quote(text):
@@ -405,17 +412,19 @@ def print_table(data, headers=None, sep='  ', out=None, ambiwidth=None):
 
 
 def shorten_line(text, maxlen=75):
-    """Truncates content to at most `maxlen` characters.
+    """Truncates `text` to length less than or equal to `maxlen` characters.
 
     This tries to be (a bit) clever and attempts to find a proper word
     boundary for doing so.
     """
-    if len(text or '') < maxlen:
+    if len(text or '') <= maxlen:
         return text
-    cut = max(text.rfind(' ', 0, maxlen), text.rfind('\n', 0, maxlen))
+    suffix = ' ...'
+    maxtextlen = maxlen - len(suffix)
+    cut = max(text.rfind(' ', 0, maxtextlen), text.rfind('\n', 0, maxtextlen))
     if cut < 0:
-        cut = maxlen
-    return text[:cut] + ' ...'
+        cut = maxtextlen
+    return text[:cut] + suffix
 
 
 class UnicodeTextWrapper(textwrap.TextWrapper):

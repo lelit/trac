@@ -22,6 +22,35 @@
     }
   }
 
+  // Conditionally disable the submit button. Returns a jQuery object.
+  $.fn.disableSubmit = function(determinant) {
+    determinant = $(determinant);
+    var subject = $(this);
+    var isDisabled;
+    if (determinant.is("input:checkbox")) {
+      isDisabled = function () {
+          return determinant.filter(":checked").length === 0;
+      }
+    } else if (determinant.is("input:file")) {
+      isDisabled = function () {
+          return !determinant.val();
+      }
+    } else {
+      return subject;
+    }
+    function toggleDisabled() {
+      subject.prop("disabled", isDisabled);
+      if (subject.prop("disabled")) {
+        subject.attr("title", _("At least one item must be selected"))
+      } else {
+        subject.removeAttr("title");
+      }
+    }
+    determinant.change(toggleDisabled);
+    toggleDisabled();
+    return subject;
+  }
+
   $.fn.enable = function(enabled) {
     if (enabled == undefined) enabled = true;
     return this.each(function() {
@@ -56,6 +85,29 @@
     return this.each(function() {
       scrollTo(0, $(this).getAbsolutePos()[0].top);
       return false;
+    });
+  }
+
+  // Disable the form's submit action after the submit button is pressed by
+  // replacing it with a handler that cancels the action. The handler is
+  // removed when navigating away from the page so that the action will
+  // be enabled when using the back button to return to the page.
+  $.fn.disableOnSubmit = function() {
+    this.click(function() {
+      var form = $(this).closest("form");
+      if (form.hasClass("trac-submit-is-disabled")) {
+        form.bind("submit.prevent-submit", function() {
+          return false;
+        });
+        $(window).on("unload", function() {
+          form.unbind("submit.prevent-submit");
+        });
+      } else {
+        form.addClass("trac-submit-is-disabled");
+        $(window).on("unload", function() {
+          form.removeClass("trac-submit-is-disabled");
+        })
+      }
     });
   }
 

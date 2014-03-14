@@ -43,6 +43,7 @@ from trac.util.datefmt import (
     format_date_or_datetime, from_utimestamp, get_date_format_hint,
     get_datetime_format_hint, parse_date, to_utimestamp, user_time, utc
 )
+from trac.util.html import to_fragment
 from trac.util.text import (
     exception_to_unicode, empty, obfuscate_email_address, shorten_line,
     to_unicode
@@ -83,12 +84,14 @@ class TicketModule(Component):
         (''since 1.1.1'').""")
 
     max_description_size = IntOption('ticket', 'max_description_size', 262144,
-        """Don't accept tickets with a too big description.
-        (''since 0.11'').""")
+        """Maximum allowed description size in characters.
+        (//since 0.11//).""")
 
     max_comment_size = IntOption('ticket', 'max_comment_size', 262144,
-        """Don't accept tickets with a too big comment.
-        (''since 0.11.2'')""")
+        """Maximum allowed comment size in characters. (//since 0.11.2//).""")
+
+    max_summary_size = IntOption('ticket', 'max_summary_size', 262144,
+        """Maximum allowed summary size in characters. (//since 1.0.2//).""")
 
     timeline_newticket_formatter = Option('timeline', 'newticket_formatter',
                                           'oneliner',
@@ -303,7 +306,7 @@ class TicketModule(Component):
                     FROM ticket_change tc
                         INNER JOIN ticket t ON t.id = tc.ticket
                             AND tc.time>=%s AND tc.time<=%s
-                    ORDER BY tc.time
+                    ORDER BY tc.time, tc.ticket
                     """ % (ts_start, ts_stop)):
                 if not (oldvalue or newvalue):
                     # ignore empty change corresponding to custom field
@@ -314,7 +317,7 @@ class TicketModule(Component):
                         ev = produce_event(data, status, fields, comment,
                                            cid)
                         if ev:
-                             yield (ev, data[1])
+                            yield (ev, data[1])
                     status, fields, comment, cid = 'edit', {}, '', None
                     data = (id, t, author, type, summary, None, component)
                 if field == 'comment':
@@ -612,7 +615,7 @@ class TicketModule(Component):
                                  "in your %(tracini)s.",
                                  section=tag.pre('[ticket]', tag.br(),
                                                  'workflow = ...'),
-                                 tracini=tag.tt('trac.ini')))
+                                 tracini=tag.code('trac.ini')))
 
             # Apply changes made by the workflow
             self._apply_ticket_changes(ticket, field_changes)
@@ -1290,6 +1293,13 @@ class TicketModule(Component):
                                num=self.max_comment_size))
             valid = False
 
+        # Validate summary length
+        if len(ticket['summary']) > self.max_summary_size:
+            add_warning(req, _("Ticket summary is too long (must be less "
+                               "than %(num)s characters)",
+                               num=self.max_summary_size))
+            valid = False
+
         # Validate comment numbering
         try:
             # replyto must be 'description' or a number
@@ -1338,9 +1348,9 @@ class TicketModule(Component):
         except Exception, e:
             self.log.error("Failure sending notification on creation of "
                     "ticket #%s: %s", ticket.id, exception_to_unicode(e))
-            add_warning(req, _("The ticket has been created, but an error "
-                               "occurred while sending notifications: "
-                               "%(message)s", message=to_unicode(e)))
+            add_warning(req, tag_("The ticket has been created, but an error "
+                                  "occurred while sending notifications: "
+                                  "%(message)s", message=to_fragment(e)))
 
         # Redirect the user to the newly created ticket or add attachment
         ticketref=tag.a('#', ticket.id, href=req.href.ticket(ticket.id))
@@ -1384,7 +1394,7 @@ class TicketModule(Component):
                 add_warning(req, tag_("The %(change)s has been saved, but an "
                                       "error occurred while sending "
                                       "notifications: %(message)s",
-                                      change=change, message=to_unicode(e)))
+                                      change=change, message=to_fragment(e)))
                 fragment = ''
 
         # After saving the changes, apply the side-effects.
@@ -1444,20 +1454,23 @@ class TicketModule(Component):
 
     def _query_link(self, req, name, value, text=None):
         """Return a link to /query with the appropriate name and value"""
-        default_query = self.ticketlink_query.lstrip('?')
-        args = arg_list_to_args(parse_arg_list(default_query))
+        from trac.ticket.query import QueryModule
+        if not self.env.is_component_enabled(QueryModule):
+            return text or value
+        args = arg_list_to_args(parse_arg_list(self.ticketlink_query))
         args[name] = value
         if name == 'resolution':
             args['status'] = 'closed'
-        return tag.a(text or value, href=req.href.query(args))
+        if text or value:
+            return tag.a(text or value, href=req.href.query(args))
 
     def _query_link_words(self, context, name, value):
         """Splits a list of words and makes a query link to each separately"""
-        if not isinstance(value, basestring): # None or other non-splitable
+        from trac.ticket.query import QueryModule
+        if not (isinstance(value, basestring) and  # None or other non-splitable
+                self.env.is_component_enabled(QueryModule)):
             return value
-        default_query = self.ticketlink_query.startswith('?') and \
-                        self.ticketlink_query[1:] or self.ticketlink_query
-        args = arg_list_to_args(parse_arg_list(default_query))
+        args = arg_list_to_args(parse_arg_list(self.ticketlink_query))
         items = []
         for i, word in enumerate(re.split(r'([;,\s]+)', value)):
             if i % 2:
