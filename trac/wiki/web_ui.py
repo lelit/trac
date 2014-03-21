@@ -46,13 +46,6 @@ from trac.wiki.formatter import format_to, OneLinerFormatter
 from trac.wiki.model import WikiPage
 
 
-class InvalidWikiPage(TracError):
-    """Exception raised when a Wiki page fails validation.
-
-    :deprecated: Not used anymore since 0.11
-    """
-
-
 class WikiModule(Component):
 
     implements(IContentConverter, INavigationContributor, IPermissionRequestor,
@@ -119,6 +112,14 @@ class WikiModule(Component):
         if not validate_page_name(pagename):
             raise TracError(_("Invalid Wiki page name '%(name)s'",
                               name=pagename))
+
+        if version is not None:
+            try:
+                version = int(version)
+            except (ValueError, TypeError):
+               raise ResourceNotFound(
+                    _('No version "%(num)s" for Wiki page "%(name)s"',
+                      num=version, name=pagename))
 
         page = WikiPage(self.env, pagename)
         versioned_page = WikiPage(self.env, pagename, version=version)

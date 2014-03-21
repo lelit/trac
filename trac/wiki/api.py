@@ -104,9 +104,6 @@ class IWikiMacroProvider(Interface):
            description.
         """
 
-    def render_macro(req, name, content):
-        """Return the HTML output of the macro :deprecated:"""
-
     def is_inline(content):
         """Return `True` if the content generated is an inline XHTML element.
 
@@ -117,10 +114,7 @@ class IWikiMacroProvider(Interface):
         """Called by the formatter when rendering the parsed wiki text.
 
         .. versionadded:: 0.11
-          This form is preferred over `render_macro`, as
-          you get the `formatter`, which knows the current `.context`
-          (and the `.req`, but ideally you shouldn't use it in your
-          macros).
+
         .. versionchanged:: 0.12
            added the `args` parameter
 
@@ -305,6 +299,12 @@ class WikiSystem(Component):
         """Whether a page with the specified name exists."""
         return pagename.rstrip('/') in self.pages
 
+    def resolve_relative_name(self, pagename, referrer):
+        """Resolves a pagename relative to a referrer pagename."""
+        if pagename.startswith(('./', '../')) or pagename in ('.', '..'):
+            return self._resolve_relative_name(pagename, referrer)
+        return pagename
+
     # IWikiSyntaxProvider methods
 
     XML_NAME = r"[\w:](?<!\d)(?:[\w:.-]*[\w-])?"
@@ -437,7 +437,7 @@ class WikiSystem(Component):
             if comp == '..':
                 if base:
                     base.pop()
-            elif comp and comp != '.':
+            elif comp != '.':
                 base.extend(components[i:])
                 break
         return '/'.join(base)
