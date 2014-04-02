@@ -11,18 +11,20 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
+import unittest
+
 from trac import perm
 from trac.core import *
+from trac.resource import Resource
 from trac.test import EnvironmentStub
-
-import unittest
 
 
 class DefaultPermissionStoreTestCase(unittest.TestCase):
 
     def setUp(self):
-        self.env = EnvironmentStub(enable=[perm.DefaultPermissionStore,
-                                           perm.DefaultPermissionGroupProvider])
+        self.env = \
+            EnvironmentStub(enable=[perm.DefaultPermissionStore,
+                                    perm.DefaultPermissionGroupProvider])
         self.store = perm.DefaultPermissionStore(self.env)
 
     def tearDown(self):
@@ -100,6 +102,48 @@ class TestPermissionRequestor(Component):
                 ('TEST_CREATE', []),
                 ('TEST_ADMIN', ['TEST_CREATE', 'TEST_DELETE']),
                 ('TEST_ADMIN', ['TEST_MODIFY'])]
+
+
+class PermissionErrorTestCase(unittest.TestCase):
+
+    def setUp(self):
+        self.env = EnvironmentStub()
+
+    def test_default_message(self):
+        permission_error = perm.PermissionError()
+        self.assertEqual(None, permission_error.action)
+        self.assertEqual(None, permission_error.resource)
+        self.assertEqual(None, permission_error.env)
+        self.assertEqual("Insufficient privileges to perform this operation.",
+                         unicode(permission_error))
+        self.assertEqual("Forbidden", permission_error.title)
+        self.assertEqual(unicode(permission_error), permission_error.msg)
+
+    def test_message_specified(self):
+        message = "The message."
+        permission_error = perm.PermissionError(msg=message)
+        self.assertEqual(message, unicode(permission_error))
+
+    def test_message_from_action(self):
+        action = 'WIKI_VIEW'
+        permission_error = perm.PermissionError(action)
+        self.assertEqual(action, permission_error.action)
+        self.assertEqual(None, permission_error.resource)
+        self.assertEqual(None, permission_error.env)
+        self.assertEqual("WIKI_VIEW privileges are required to perform this "
+                         "operation. You don't have the required "
+                         "permissions.", unicode(permission_error))
+
+    def test_message_from_action_and_resource(self):
+        action = 'WIKI_VIEW'
+        resource = Resource('wiki', 'WikiStart')
+        permission_error = perm.PermissionError(action, resource, self.env)
+        self.assertEqual(action, permission_error.action)
+        self.assertEqual(resource, permission_error.resource)
+        self.assertEqual(self.env, permission_error.env)
+        self.assertEqual("WIKI_VIEW privileges are required to perform this "
+                         "operation on WikiStart. You don't have the "
+                         "required permissions.", unicode(permission_error))
 
 
 class PermissionSystemTestCase(unittest.TestCase):
@@ -184,7 +228,8 @@ class PermissionCacheTestCase(unittest.TestCase):
     def test_require(self):
         self.perm.require('TEST_MODIFY')
         self.perm.require('TEST_ADMIN')
-        self.assertRaises(perm.PermissionError, self.perm.require, 'TRAC_ADMIN')
+        self.assertRaises(perm.PermissionError,
+                          self.perm.require, 'TRAC_ADMIN')
 
     def test_assert_permission(self):
         self.perm.assert_permission('TEST_MODIFY')
@@ -231,12 +276,14 @@ class TestPermissionPolicy(Component):
 
 
 class PermissionPolicyTestCase(unittest.TestCase):
+
     def setUp(self):
         self.env = EnvironmentStub(enable=[perm.DefaultPermissionStore,
                                            perm.DefaultPermissionPolicy,
                                            TestPermissionPolicy,
                                            TestPermissionRequestor])
-        self.env.config.set('trac', 'permission_policies', 'TestPermissionPolicy')
+        self.env.config.set('trac', 'permission_policies',
+                            'TestPermissionPolicy')
         self.policy = TestPermissionPolicy(self.env)
         self.perm = perm.PermissionCache(self.env, 'testuser')
 
@@ -261,7 +308,8 @@ class PermissionPolicyTestCase(unittest.TestCase):
                           ('testuser', 'TEST_ADMIN'): True})
 
     def test_policy_chaining(self):
-        self.env.config.set('trac', 'permission_policies', 'TestPermissionPolicy,DefaultPermissionPolicy')
+        self.env.config.set('trac', 'permission_policies',
+                            'TestPermissionPolicy,DefaultPermissionPolicy')
         self.policy.grant('testuser', ['TEST_MODIFY'])
         system = perm.PermissionSystem(self.env)
         system.grant_permission('testuser', 'TEST_ADMIN')
@@ -279,6 +327,7 @@ class PermissionPolicyTestCase(unittest.TestCase):
 def suite():
     suite = unittest.TestSuite()
     suite.addTest(unittest.makeSuite(DefaultPermissionStoreTestCase))
+    suite.addTest(unittest.makeSuite(PermissionErrorTestCase))
     suite.addTest(unittest.makeSuite(PermissionSystemTestCase))
     suite.addTest(unittest.makeSuite(PermissionCacheTestCase))
     suite.addTest(unittest.makeSuite(PermissionPolicyTestCase))

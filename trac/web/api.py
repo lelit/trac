@@ -29,10 +29,12 @@ from StringIO import StringIO
 import sys
 import urlparse
 
+from genshi.builder import Fragment
 from trac.core import Interface, TracError
+from trac.perm import PermissionError
 from trac.util import get_last_traceback, unquote
 from trac.util.datefmt import http_date, localtz
-from trac.util.text import empty, to_unicode
+from trac.util.text import empty, exception_to_unicode, to_unicode
 from trac.util.translation import _
 from trac.web.href import Href
 from trac.web.wsgi import _FileWrapper
@@ -48,7 +50,19 @@ class IAuthenticator(Interface):
 
 
 class IRequestHandler(Interface):
-    """Decide which `trac.core.Component` handles which `Request`, and how."""
+    """Decide which `trac.core.Component` handles which `Request`, and how.
+
+    The boolean property `is_valid_default_handler` determines whether the
+    `IRequestFilter` can be used as a `default_handler` and defaults to
+    `True`. To be suitable as a `default_handler`, an `IRequestFilter` must
+    return an HTML document and `data` dictionary for rendering the document,
+    and must not require that `match_request` be called prior to
+    `process_request`.
+
+    The boolean property `jquery_noconflict` determines whether jQuery's
+    `noConflict` mode will be activated by the handler, and defaults to
+    `False`.
+    """
 
     def match_request(req):
         """Return whether the handler wants to process the given request."""
@@ -141,7 +155,7 @@ HTTP_STATUS = dict([(code, reason.title()) for code, (reason, description)
 class HTTPException(Exception):
 
     def __init__(self, detail, *args):
-        if isinstance(detail, TracError):
+        if isinstance(detail, (TracError, PermissionError)):
             self.detail = detail.message
             self.reason = detail.title
         else:
@@ -150,6 +164,35 @@ class HTTPException(Exception):
             self.detail = self.detail % args
         Exception.__init__(self, '%s %s (%s)' % (self.code, self.reason,
                                                  self.detail))
+
+    @property
+    def message(self):
+        # The message is based on the e.detail, which can be an Exception
+        # object, but not a TracError one: when creating HTTPException,
+        # a TracError.message is directly assigned to e.detail
+        if isinstance(self.detail, Exception): # not a TracError or PermissionError
+            message = exception_to_unicode(self.detail)
+        elif isinstance(self.detail, Fragment): # TracError or PermissionError markup
+            message = self.detail
+        else:
+            message = to_unicode(self.detail)
+        return message
+
+    @property
+    def title(self):
+        try:
+            # We first try to get localized error messages here, but we
+            # should ignore secondary errors if the main error was also
+            # due to i18n issues
+            title = _("Error")
+            if self.reason:
+                if title.lower() in self.reason.lower():
+                    title = self.reason
+                else:
+                    title = _("Error: %(message)s", message=self.reason)
+        except Exception:
+            title = "Error"
+        return title
 
     @classmethod
     def subclass(cls, name, code):

@@ -58,9 +58,11 @@ class LoginModule(Component):
 
     implements(IAuthenticator, INavigationContributor, IRequestHandler)
 
+    is_valid_default_handler = False
+
     check_ip = BoolOption('trac', 'check_auth_ip', 'false',
          """Whether the IP address of the user should be checked for
-         authentication (''since 0.9'').""")
+         authentication. (''since 0.9'')""")
 
     ignore_case = BoolOption('trac', 'ignore_auth_case', 'false',
         """Whether login names should be converted to lower case
@@ -71,7 +73,7 @@ class LoginModule(Component):
 
         This value determines how long the browser will cache
         authentication information, and therefore, after how much
-        inactivity a user will have to log in again. The default value
+        inactivity a user will have to log in again. The value
         of 0 makes the cookie expire at the end of the browsing
         session. (''since 0.12'')""")
 

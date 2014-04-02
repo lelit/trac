@@ -430,6 +430,8 @@ class AttachmentModule(Component):
     implements(IRequestHandler, INavigationContributor, IWikiSyntaxProvider,
                IResourceManager)
 
+    is_valid_default_handler = False
+
     change_listeners = ExtensionPoint(IAttachmentChangeListener)
     manipulators = ExtensionPoint(IAttachmentManipulator)
 
@@ -453,7 +455,7 @@ class AttachmentModule(Component):
         scripting attacks.
 
         For public sites where anonymous users can create attachments it is
-        recommended to leave this option disabled (which is the default).""")
+        recommended to leave this option disabled.""")
 
     # INavigationContributor methods
 

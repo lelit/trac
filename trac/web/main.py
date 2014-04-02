@@ -28,13 +28,13 @@ from pprint import pformat, pprint
 import re
 import sys
 
-from genshi.builder import Fragment, tag
+from genshi.builder import tag
 from genshi.output import DocType
 from genshi.template import TemplateLoader
 
 from trac import __version__ as TRAC_VERSION
-from trac.config import BoolOption, ExtensionOption, Option, \
-                        OrderedExtensionsOption
+from trac.config import BoolOption, ConfigurationError, ExtensionOption, \
+                        Option, OrderedExtensionsOption
 from trac.core import *
 from trac.env import open_environment
 from trac.loader import get_plugin_info, match_plugins_to_frames
@@ -48,7 +48,7 @@ from trac.util.text import exception_to_unicode, shorten_line, to_unicode
 from trac.util.translation import _, get_negotiated_locale, has_babel, \
                                   safefmt, tag_
 from trac.web.api import *
-from trac.web.chrome import Chrome, add_warning
+from trac.web.chrome import Chrome, add_notice, add_warning
 from trac.web.href import Href
 from trac.web.session import Session
 
@@ -94,8 +94,8 @@ class RequestDispatcher(Component):
 
     filters = OrderedExtensionsOption('trac', 'request_filters',
                                       IRequestFilter,
-        doc="""Ordered list of filters to apply to all requests
-            (''since 0.10'').""")
+        doc="""Ordered list of filters to apply to all requests.
+            (''since 0.10'')""")
 
     default_handler = ExtensionOption('trac', 'default_handler',
                                       IRequestHandler, 'WikiModule',
@@ -104,7 +104,7 @@ class RequestDispatcher(Component):
 
         Options include `TimelineModule`, `RoadmapModule`,
         `BrowserModule`, `QueryModule`, `ReportModule`, `TicketModule`
-        and `WikiModule`. The default is `WikiModule`. (''since 0.9'')""")
+        and `WikiModule`. (''since 0.9'')""")
 
     default_timezone = Option('trac', 'default_timezone', '',
         """The default timezone to use""")
@@ -177,9 +177,9 @@ class RequestDispatcher(Component):
                         if handler.match_request(req):
                             chosen_handler = handler
                             break
-                    if not chosen_handler:
-                        if not req.path_info or req.path_info == '/':
-                            chosen_handler = self.default_handler
+                    if not chosen_handler and \
+                            (not req.path_info or req.path_info == '/'):
+                        chosen_handler = self.get_valid_default_handler(req)
                     # pre-process any incoming request, whether a handler
                     # was found or not
                     chosen_handler = \
@@ -257,13 +257,27 @@ class RequestDispatcher(Component):
                                    exception_to_unicode(e, traceback=True))
                 raise err[0], err[1], err[2]
         except PermissionError, e:
-            raise HTTPForbidden(to_unicode(e))
+            raise HTTPForbidden(e)
         except ResourceNotFound, e:
             raise HTTPNotFound(e)
         except TracError, e:
             raise HTTPInternalError(e)
 
     # Internal methods
+
+    def get_valid_default_handler(self, req):
+        handler = self.default_handler
+        if not handler or \
+                not getattr(handler, 'is_valid_default_handler', True):
+            raise ConfigurationError(
+                tag_("%(handler)s is not a valid default handler. Please "
+                     "update %(option)s through the %(page)s page or by "
+                     "directly editing trac.ini.",
+                     handler=tag.code(handler.__class__.__name__),
+                     option=tag.code("[trac] default_handler"),
+                     page=tag.a(_("Basic Settings"),
+                                href=req.href.admin('general/basics'))))
+        return handler
 
     def _get_perm(self, req):
         if isinstance(req.session, FakeSession):
@@ -529,35 +543,13 @@ def _send_user_error(req, env, e):
     # See trac/web/api.py for the definition of HTTPException subclasses.
     if env:
         env.log.warn('[%s] %s' % (req.remote_addr, exception_to_unicode(e)))
-    try:
-        # We first try to get localized error messages here, but we
-        # should ignore secondary errors if the main error was also
-        # due to i18n issues
-        title = _('Error')
-        if e.reason:
-            if title.lower() in e.reason.lower():
-                title = e.reason
-            else:
-                title = _('Error: %(message)s', message=e.reason)
-    except Exception:
-        title = 'Error'
-    # The message is based on the e.detail, which can be an Exception
-    # object, but not a TracError one: when creating HTTPException,
-    # a TracError.message is directly assigned to e.detail
-    if isinstance(e.detail, Exception): # not a TracError
-        message = exception_to_unicode(e.detail)
-    elif isinstance(e.detail, Fragment): # markup coming from a TracError
-        message = e.detail
-    else:
-        message = to_unicode(e.detail)
-    data = {'title': title, 'type': 'TracError', 'message': message,
+    data = {'title': e.title, 'type': 'TracError', 'message': e.message,
             'frames': [], 'traceback': None}
     if e.code == 403 and req.authname == 'anonymous':
         # TRANSLATOR: ... not logged in, you may want to 'do so' now (link)
         do_so = tag.a(_("do so"), href=req.href.login())
-        req.chrome['notices'].append(
-            tag_("You are currently not logged in. You may want to "
-                 "%(do_so)s now.", do_so=do_so))
+        add_notice(req, tag_("You are currently not logged in. You may want "
+                             "to %(do_so)s now.", do_so=do_so))
     try:
         req.send_error(sys.exc_info(), status=e.code, env=env, data=data)
     except RequestDone:
@@ -609,7 +601,9 @@ def send_internal_error(env, req, exc_info):
             sys_info = "".join("|| '''`%s`''' || `%s` ||\n"
                                % (k, v.replace('\n', '` [[br]] `'))
                                for k, v in env.get_systeminfo())
-            sys_info += "|| '''`jQuery`''' || `#JQUERY#` ||\n"
+            sys_info += "|| '''`jQuery`''' || `#JQUERY#` ||\n" \
+                        "|| '''`jQuery UI`''' || `#JQUERYUI#` ||\n" \
+                        "|| '''`jQuery Timepicker`''' || `#JQUERYTP#` ||\n"
             enabled_plugins = "".join("|| '''`%s`''' || `%s` ||\n"
                                       % (p['name'], p['version'] or _('N/A'))
                                       for p in plugins)
@@ -656,6 +650,7 @@ User agent: `#USER_AGENT#`
             'tracker': tracker, 'tracker_args': tracker_args,
             'description': description, 'description_en': description_en}
 
+    Chrome(env).add_jquery_ui(req)
     try:
         req.send_error(exc_info, status=500, env=env, data=data)
     except RequestDone:

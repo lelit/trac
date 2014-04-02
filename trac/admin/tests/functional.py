@@ -80,6 +80,62 @@ class TestBasicSettingsAuthorization(AuthorizationTestCaseSetup):
                                 "Basic Settings")
 
 
+class TestDefaultHandler(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Set default handler from the Basic Settings page."""
+
+        # Confirm default value.
+        self._tester.go_to_admin("Basic Settings")
+        tc.find(r'<option value="WikiModule" selected="selected">'
+                r'WikiModule</option>')
+        tc.go(self._tester.url)
+        tc.find("Welcome to Trac")
+
+        # Set to another valid default handler.
+        self._tester.go_to_admin("Basic Settings")
+        tc.formvalue('modbasic', 'default_handler', 'TimelineModule')
+        tc.submit()
+        tc.find("Your changes have been saved.")
+        tc.find(r'<option value="TimelineModule" selected="selected">'
+                r'TimelineModule</option>')
+        tc.go(self._tester.url)
+        tc.find(r'<h1>Timeline</h1>')
+
+        # Set to valid disabled default handler.
+        try:
+            self._testenv.set_config('components',
+                                     'trac.timeline.web_ui.TimelineModule',
+                                     'disabled')
+            self._tester.go_to_admin("Basic Settings")
+            tc.find(r'<option value="TimelineModule">TimelineModule</option>')
+            tc.find(r'<span class="hint">TimelineModule is not a valid '
+                    r'IRequestHandler or is not enabled.</span>')
+            tc.go(self._tester.url)
+            tc.find(r'<h1>Configuration Error</h1>')
+            tc.find(r'Cannot find an implementation of the '
+                    r'<code>IRequestHandler</code> interface named '
+                    r'<code>TimelineModule</code>')
+        finally:
+            self._testenv.remove_config('components',
+                                        'trac.timeline.web_ui.timelinemodule')
+
+        # Set to invalid default handler.
+        try:
+            self._testenv.set_config('trac', 'default_handler',
+                                     'BatchModifyModule')
+            self._tester.go_to_admin("Basic Settings")
+            tc.find(r'<option value="BatchModifyModule">BatchModifyModule'
+                    r'</option>')
+            tc.find(r'<span class="hint">BatchModifyModule is not a valid '
+                    r'IRequestHandler or is not enabled.</span>')
+            tc.go(self._tester.url)
+            tc.find(r'<h1>Configuration Error</h1>')
+            tc.find(r'<code>BatchModifyModule</code> is not a valid default '
+                    r'handler.')
+        finally:
+            self._testenv.set_config('trac', 'default_handler', 'WikiModule')
+
+
 class TestLoggingNone(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Turn off logging."""
@@ -159,6 +215,30 @@ class TestAddUserToGroup(FunctionalTwillTestCaseSetup):
         authenticated = unicode_to_base64('authenticated')
         somegroup = unicode_to_base64('somegroup')
         tc.find('%s:%s' % (authenticated, somegroup))
+
+        revoke_checkbox = '%s:%s' % (unicode_to_base64('anonymous'),
+                                     unicode_to_base64('PERMISSION_GRANT'))
+        tc.formvalue('addperm', 'gp_subject', 'anonymous')
+        tc.formvalue('addperm', 'action', 'PERMISSION_GRANT')
+        tc.submit()
+        tc.find(revoke_checkbox)
+        self._testenv.get_trac_environment().config.touch()
+        self._tester.logout()
+        self._tester.go_to_admin("Permissions")
+        try:
+            tc.formvalue('addsubj', 'sg_subject', 'someuser')
+            tc.formvalue('addsubj', 'sg_group', 'authenticated')
+            tc.submit()
+            tc.find("The subject someuser was not added to the "
+                    "group authenticated because the group has "
+                    "TICKET_CHGPROP permission and users cannot "
+                    "grant permissions they don't possess.")
+        finally:
+            self._tester.login('admin')
+            self._tester.go_to_admin("Permissions")
+            tc.formvalue('revokeform', 'sel', revoke_checkbox)
+            tc.submit()
+            tc.notfind(revoke_checkbox)
 
 
 class TestRemoveUserFromGroup(FunctionalTwillTestCaseSetup):
@@ -448,6 +528,7 @@ def functionalSuite(suite=None):
         suite = trac.tests.functional.functionalSuite()
     suite.addTest(TestBasicSettings())
     suite.addTest(TestBasicSettingsAuthorization())
+    suite.addTest(TestDefaultHandler())
     suite.addTest(TestLoggingNone())
     suite.addTest(TestLoggingAuthorization())
     suite.addTest(TestLoggingToFile())
