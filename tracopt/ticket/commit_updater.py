@@ -132,6 +132,9 @@ class CommitTicketUpdater(Component):
     notify = BoolOption('ticket', 'commit_ticket_update_notify', 'true',
         """Send ticket change notification when updating a ticket.""")
 
+    close_status = Option('ticket', 'commit_ticket_update_close_status', 'closed',
+        """Status of the ticket set by the close command.""")
+
     ticket_prefix = '(?:#|(?:ticket|issue|bug)[: ]?)'
     ticket_reference = ticket_prefix + '[0-9]+'
     ticket_command = (r'(?P<action>[A-Za-z]*)\s*.?\s*'
@@ -259,7 +262,7 @@ In [changeset:"%s"]:
             self.log.info("%s doesn't have TICKET_MODIFY permission for #%d",
                           changeset.author, ticket.id)
             return False
-        ticket['status'] = 'closed'
+        ticket['status'] = self.close_status
         ticket['resolution'] = 'fixed'
         if not ticket['owner']:
             ticket['owner'] = changeset.author
