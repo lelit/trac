@@ -29,7 +29,7 @@ from trac.cache import CacheManager
 from trac.config import BoolOption, ConfigSection, Configuration, Option, \
                         PathOption
 from trac.core import Component, ComponentManager, implements, Interface, \
-                      ExtensionPoint, TracError
+                      ExtensionPoint, TracBaseError, TracError
 from trac.db.api import (DatabaseManager, QueryContextManager,
                          TransactionContextManager, with_transaction)
 from trac.util import copytree, create_file, get_pkginfo, lazy, makedirs, \
@@ -96,7 +96,7 @@ class IEnvironmentSetupParticipant(Interface):
         """
 
 
-class BackupError(RuntimeError):
+class BackupError(TracBaseError, RuntimeError):
     """Exception raised during an upgrade when the DB backup fails."""
 
 
@@ -288,15 +288,39 @@ class Environment(Component, ComponentManager):
                 setup_participant.environment_created()
 
     def get_systeminfo(self):
-        """Return a list of `(name, version)` tuples describing the
-        name and version information of external packages used by Trac
-        and plugins.
+        """Return a list of `(name, version)` tuples describing the name
+        and version information of external packages used by Trac and plugins.
         """
         info = self.systeminfo[:]
         for provider in self.system_info_providers:
             info.extend(provider.get_system_info() or [])
         info.sort(key=lambda (name, version): (name != 'Trac', name.lower()))
         return info
+
+    def get_configinfo(self):
+        """Returns a list of dictionaries containing the `name` and `options`
+        of each configuration section. The value of `options` is a list of
+        dictionaries containing the `name`, `value` and `modified` state of
+        each configuration option. The `modified` value is True if the value
+        differs from its default.
+
+        :since: version 1.1.2
+        """
+        defaults = self.config.defaults(self.compmgr)
+        sections = []
+        for section in self.config.sections(self.compmgr):
+            options = []
+            default_options = defaults.get(section, {})
+            for name, value in self.config.options(section, self.compmgr):
+                default = default_options.get(name) or ''
+                options.append({
+                    'name': name, 'value': value,
+                    'modified': unicode(value) != unicode(default)
+                })
+            options.sort(key=lambda o: o['name'])
+            sections.append({'name': section, 'options': options})
+        sections.sort(key=lambda s: s['name'])
+        return sections
 
     # ISystemInfoProvider methods
 
