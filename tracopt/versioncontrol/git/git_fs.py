@@ -613,7 +613,10 @@ class GitNode(Node):
                 self.repos.git.blame(self.rev,self.__git_path())]
 
     def get_entries(self):
-        if not self.isdir:
+        # Temporary fix to handle git submodules (related to #10603):
+        # they do not contain entries. Without this, the browser shows
+        # an endless hierarchy where the submodule directory contains itself
+        if not self.isdir or self.fs_perm.startswith('16'):
             return
 
         with self.repos.git.get_historian(self.rev,
@@ -629,6 +632,11 @@ class GitNode(Node):
         return ''
 
     def get_content_length(self):
+        # Temporary fix to http://trac.edgewall.org/ticket/10603:
+        # just return 0 for git submodules
+        if self.isdir and self.fs_perm.startswith('16'):
+            return 0
+
         if not self.isfile:
             return None
 
