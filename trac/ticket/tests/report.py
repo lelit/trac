@@ -11,19 +11,17 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 import doctest
 from datetime import datetime, timedelta
 
 import unittest
 from StringIO import StringIO
 
+import trac.tests.compat
 from trac.db.mysql_backend import MySQLConnection
 from trac.ticket.model import Ticket
 from trac.ticket.report import ReportModule
 from trac.test import EnvironmentStub, Mock, MockPerm
-from trac.tests import compat
 from trac.util.datefmt import utc
 from trac.web.api import Request, RequestDone
 from trac.web.href import Href

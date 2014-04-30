@@ -11,13 +11,12 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 import atexit
 import errno
 import os
 import signal
 import sys
+
 
 def daemonize(pidfile=None, progname=None, stdin='/dev/null',
               stdout='/dev/null', stderr='/dev/null', umask=022):

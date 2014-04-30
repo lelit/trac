@@ -11,26 +11,24 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 from datetime import datetime, timedelta
 from StringIO import StringIO
 import tempfile
 import shutil
 import unittest
 
+import trac.tests.compat
 from trac import core
 from trac.attachment import Attachment
 from trac.core import TracError, implements
 from trac.resource import ResourceNotFound
-from trac.tests import compat
+from trac.test import EnvironmentStub
 from trac.ticket.model import (
     Ticket, Component, Milestone, Priority, Type, Version
 )
 from trac.ticket.api import (
     IMilestoneChangeListener, ITicketChangeListener, TicketSystem
 )
-from trac.test import EnvironmentStub
 from trac.util.datefmt import from_utimestamp, to_utimestamp, utc
 
 

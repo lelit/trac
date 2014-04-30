@@ -14,11 +14,10 @@
 import doctest
 import unittest
 from StringIO import StringIO
-import sys
 
+import trac.tests.compat
 from trac.core import *
 from trac.test import EnvironmentStub
-from trac.tests import compat
 from trac.mimeview import api
 from trac.mimeview.api import get_mimetype, IContentConverter, Mimeview, \
                               _group_lines

@@ -14,8 +14,6 @@
 #
 # Author: Jonas Borgström <jonas@edgewall.com>
 
-from __future__ import with_statement
-
 import csv
 from datetime import datetime
 import pkg_resources
@@ -45,15 +43,12 @@ from trac.util.datefmt import (
 )
 from trac.util.html import to_fragment
 from trac.util.text import (
-    exception_to_unicode, empty, obfuscate_email_address, shorten_line,
-    to_unicode
+    exception_to_unicode, empty, obfuscate_email_address, shorten_line
 )
 from trac.util.presentation import separated
-from trac.util.translation import _, tag_, tagn_, N_, gettext, ngettext
+from trac.util.translation import _, tag_, tagn_, N_, ngettext
 from trac.versioncontrol.diff import get_diff_options, diff_blocks
-from trac.web import (
-    IRequestHandler, RequestDone, arg_list_to_args, parse_arg_list
-)
+from trac.web import IRequestHandler, arg_list_to_args, parse_arg_list
 from trac.web.chrome import (
     Chrome, INavigationContributor, ITemplateProvider,
     add_ctxtnav, add_link, add_notice, add_script, add_script_data,
@@ -1331,9 +1326,10 @@ class TicketModule(Component):
             for field, message in manipulator.validate_ticket(req, ticket):
                 valid = False
                 if field:
-                    add_warning(req, _("The ticket field '%(field)s' is "
-                                       "invalid: %(message)s",
-                                       field=field, message=message))
+                    add_warning(req, tag_("The ticket field %(field)s"
+                                          " is invalid: %(message)s",
+                                          field=tag.strong(field),
+                                          message=message))
                 else:
                     add_warning(req, message)
         return valid

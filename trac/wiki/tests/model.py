@@ -11,19 +11,17 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 from datetime import datetime
 import shutil
 from StringIO import StringIO
 import tempfile
 import unittest
 
+import trac.tests.compat
 from trac.attachment import Attachment
 from trac.core import *
-from trac.resource import Resource, ResourceNotFound
+from trac.resource import Resource
 from trac.test import EnvironmentStub
-from trac.tests import compat
 from trac.util.datefmt import utc, to_utimestamp
 from trac.wiki import WikiPage, IWikiChangeListener
 

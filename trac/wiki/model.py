@@ -16,12 +16,10 @@
 # Author: Jonas Borgström <jonas@edgewall.com>
 #         Christopher Lenz <cmlenz@gmx.de>
 
-from __future__ import with_statement
-
 from datetime import datetime
 
 from trac.core import *
-from trac.resource import Resource, ResourceNotFound
+from trac.resource import Resource
 from trac.util.datefmt import from_utimestamp, to_utimestamp, utc
 from trac.util.translation import _
 from trac.wiki.api import WikiSystem, validate_page_name

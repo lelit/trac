@@ -11,8 +11,6 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 import shutil
 import tempfile
 import unittest
@@ -24,6 +22,7 @@ from trac.search.web_ui import SearchModule
 from trac.test import MockPerm
 from trac.web.href import Href
 from trac.wiki.tests import formatter
+
 
 SEARCH_TEST_CASES = u"""
 ============================== search: link resolver

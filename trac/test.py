@@ -17,8 +17,6 @@
 # Author: Jonas Borgström <jonas@edgewall.com>
 #         Christopher Lenz <cmlenz@gmx.de>
 
-from __future__ import with_statement
-
 import doctest
 import os
 import unittest
@@ -144,7 +142,8 @@ class TestSetup(unittest.TestSuite):
         return result
 
     def _wrapped_run(self, *args, **kwargs):
-        "Python 2.7 / unittest2 compatibility - there must be a better way..."
+        """Python 2.7 / unittest2 compatibility - there must be a better
+        way..."""
         self.setUp()
         if hasattr(self, 'fixture'):
             for test in self._tests:
@@ -152,6 +151,7 @@ class TestSetup(unittest.TestSuite):
                     test.setFixture(self.fixture)
         unittest.TestSuite._wrapped_run(self, *args, **kwargs)
         self.tearDown()
+
 
 class TestCaseSetup(unittest.TestCase):
     def setFixture(self, fixture):
@@ -164,7 +164,7 @@ def get_dburi():
     dburi = os.environ.get('TRAC_TEST_DB_URI')
     if dburi:
         scheme, db_prop = _parse_db_str(dburi)
-        # Assume the schema 'tractest' for Postgres
+        # Assume the schema 'tractest' for PostgreSQL
         if scheme == 'postgres' and \
                 not db_prop.get('params', {}).get('schema'):
             if '?' in dburi:
@@ -176,9 +176,8 @@ def get_dburi():
 
 
 def reset_sqlite_db(env, db_prop):
-    dbname = os.path.basename(db_prop['path'])
     with env.db_transaction as db:
-        tables = db("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = db.get_table_names()
         for table in tables:
             db("DELETE FROM %s" % table)
         return tables
@@ -189,24 +188,24 @@ def reset_postgres_db(env, db_prop):
         dbname = db.schema
         if dbname:
             # reset sequences
-            # information_schema.sequences view is available in PostgreSQL 8.2+
-            # however Trac supports PostgreSQL 8.0+, uses
+            # information_schema.sequences view is available in
+            # PostgreSQL 8.2+ however Trac supports PostgreSQL 8.0+, uses
             # pg_get_serial_sequence()
-            for seq in db("""
-                    SELECT sequence_name FROM (
-                        SELECT pg_get_serial_sequence(%s||table_name,
-                                                      column_name)
-                               AS sequence_name
-                        FROM information_schema.columns
-                        WHERE table_schema=%s) AS tab
-                    WHERE sequence_name IS NOT NULL""",
-                    (dbname + '.', dbname)):
+            seqs = [seq for seq, in db("""
+                SELECT sequence_name
+                FROM (
+                    SELECT pg_get_serial_sequence(
+                        quote_ident(table_schema) || '.' ||
+                        quote_ident(table_name), column_name) AS sequence_name
+                    FROM information_schema.columns
+                    WHERE table_schema=%s) AS tab
+                WHERE sequence_name IS NOT NULL""", (dbname,))]
+            for seq in seqs:
                 db("ALTER SEQUENCE %s RESTART WITH 1" % seq)
             # clear tables
-            tables = db("""SELECT table_name FROM information_schema.tables
-                           WHERE table_schema=%s""", (dbname,))
+            tables = db.get_table_names()
             for table in tables:
-                db("DELETE FROM %s" % table)
+                db("DELETE FROM %s" % db.quote(table))
             # PostgreSQL supports TRUNCATE TABLE as well
             # (see http://www.postgresql.org/docs/8.1/static/sql-truncate.html)
             # but on the small tables used here, DELETE is actually much faster
@@ -222,12 +221,12 @@ def reset_mysql_db(env, db_prop):
                            WHERE table_schema=%s""", (dbname,))
             for table, auto_increment in tables:
                 if auto_increment is None or auto_increment == 1:
-                    # DELETE FROM is prefered to TRUNCATE TABLE, as the
+                    # DELETE FROM is preferred to TRUNCATE TABLE, as the
                     # auto_increment is not used or it is 1.
                     db("DELETE FROM %s" % table)
                 else:
-                    # TRUNCATE TABLE is prefered to DELETE FROM, as we need to
-                    # reset the auto_increment in MySQL.
+                    # TRUNCATE TABLE is preferred to DELETE FROM, as we
+                    # need to reset the auto_increment in MySQL.
                     db("TRUNCATE TABLE %s" % table)
             return tables
 
@@ -335,28 +334,26 @@ class EnvironmentStub(Environment):
         remove_sqlite_db = False
         try:
             with self.db_transaction as db:
-                db.rollback() # make sure there's no transaction in progress
+                db.rollback()  # make sure there's no transaction in progress
                 # check the database version
-                database_version = db(
-                    "SELECT value FROM system WHERE name='database_version'")
-                if database_version:
-                    database_version = int(database_version[0][0])
-                if database_version == db_default.db_version:
-                    # same version, simply clear the tables (faster)
-                    m = sys.modules[__name__]
-                    reset_fn = 'reset_%s_db' % scheme
-                    if hasattr(m, reset_fn):
-                        tables = getattr(m, reset_fn)(self, db_prop)
-                else:
-                    # different version or version unknown, drop the tables
-                    remove_sqlite_db = True
-                    self.destroy_db(scheme, db_prop)
-        except Exception, e:
+                database_version = self.get_version()
+        except Exception:
             # "Database not found ...",
             # "OperationalError: no such table: system" or the like
             pass
+        else:
+            if database_version == db_default.db_version:
+                # same version, simply clear the tables (faster)
+                m = sys.modules[__name__]
+                reset_fn = 'reset_%s_db' % scheme
+                if hasattr(m, reset_fn):
+                    tables = getattr(m, reset_fn)(self, db_prop)
+            else:
+                # different version or version unknown, drop the tables
+                remove_sqlite_db = True
+                self.destroy_db(scheme, db_prop)
 
-        db = None # as we might shutdown the pool     FIXME no longer needed!
+        db = None  # as we might shutdown the pool    FIXME no longer needed!
 
         if scheme == 'sqlite' and remove_sqlite_db:
             path = db_prop['path']
@@ -374,12 +371,14 @@ class EnvironmentStub(Environment):
                 self.global_databasemanager.shutdown()
 
         with self.db_transaction as db:
+            if scheme == 'sqlite':
+                # Speed-up tests with SQLite database
+                db("PRAGMA synchronous = OFF")
             if default_data:
                 for table, cols, vals in db_default.get_data(db):
                     db.executemany("INSERT INTO %s (%s) VALUES (%s)"
                                    % (table, ','.join(cols),
-                                      ','.join(['%s' for c in cols])),
-                                   vals)
+                                      ','.join(['%s'] * len(cols))), vals)
             else:
                 db("INSERT INTO system (name, value) VALUES (%s, %s)",
                    ('database_version', str(db_default.db_version)))
@@ -390,12 +389,9 @@ class EnvironmentStub(Environment):
         try:
             with self.db_transaction as db:
                 if scheme == 'postgres' and db.schema:
-                    db('DROP SCHEMA "%s" CASCADE' % db.schema)
+                    db('DROP SCHEMA %s CASCADE' % db.quote(db.schema))
                 elif scheme == 'mysql':
-                    dbname = os.path.basename(db_prop['path'])
-                    for table in db("""
-                          SELECT table_name FROM information_schema.tables
-                          WHERE table_schema=%s""", (dbname,)):
+                    for table in db.get_table_names():
                         db("DROP TABLE IF EXISTS `%s`" % table)
         except Exception:
             # "TracError: Database not found...",
@@ -403,7 +399,7 @@ class EnvironmentStub(Environment):
             pass
         return False
 
-    # overriden
+    # overridden
 
     def is_component_enabled(self, cls):
         if self._component_name(cls).startswith('__main__.'):
@@ -429,6 +425,7 @@ def locate(fn):
 
 
 INCLUDE_FUNCTIONAL_TESTS = True
+
 
 def suite():
     import trac.tests

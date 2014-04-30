@@ -11,15 +11,13 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 import os
 import tempfile
 import unittest
 from subprocess import Popen, PIPE
 
+import trac.tests.compat
 from trac.test import locate, EnvironmentStub
-from trac.tests import compat
 from trac.tests.compat import rmtree
 from trac.util import create_file
 from trac.util.compat import close_fds

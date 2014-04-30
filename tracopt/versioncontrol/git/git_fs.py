@@ -12,8 +12,6 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 from datetime import datetime
 import itertools
 import os
@@ -52,11 +50,15 @@ class GitCachedRepository(CachedRepository):
 
     def normalize_rev(self, rev):
         if not rev:
-            return self.repos.get_youngest_rev()
+            return self.get_youngest_rev()
         normrev = self.repos.git.verifyrev(rev)
         if normrev is None:
             raise NoSuchChangeset(rev)
         return normrev
+
+    def get_youngest_rev(self):
+        # return None if repository is empty
+        return CachedRepository.get_youngest_rev(self) or None
 
     def get_changesets(self, start, stop):
         for key, csets in itertools.groupby(
@@ -549,12 +551,16 @@ class GitNode(Node):
         self.fs_sha = None # points to either tree or blobs
         self.fs_perm = None
         self.fs_size = None
-        rev = unicode(rev) if rev else 'HEAD'
-        rev = repos.normalize_rev(rev)
+        if rev:
+            rev = repos.normalize_rev(to_unicode(rev))
+        else:
+            rev = repos.youngest_rev
 
         kind = Node.DIRECTORY
         p = path.strip('/')
-        if p: # ie. not the root-tree
+        if p:  # ie. not the root-tree
+            if not rev:
+                raise NoSuchNode(path, rev)
             if not ls_tree_info:
                 ls_tree_info = repos.git.ls_tree(rev, p) or None
                 if ls_tree_info:
@@ -613,6 +619,8 @@ class GitNode(Node):
                 self.repos.git.blame(self.rev,self.__git_path())]
 
     def get_entries(self):
+        if not self.rev:  # if empty repository
+            return
         # Temporary fix to handle git submodules (related to #10603):
         # they do not contain entries. Without this, the browser shows
         # an endless hierarchy where the submodule directory contains itself
@@ -646,6 +654,8 @@ class GitNode(Node):
         return self.fs_size
 
     def get_history(self, limit=None):
+        if not self.rev:  # if empty repository
+            return
         # TODO: find a way to follow renames/copies
         for is_last, rev in _last_iterable(self.repos.git.history(self.rev,
                                                 self.__git_path(), limit)):

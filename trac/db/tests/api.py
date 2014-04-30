@@ -11,13 +11,14 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 import os
 import unittest
 
+import trac.tests.compat
 from trac.db.api import DatabaseManager, _parse_db_str, get_column_names, \
                         with_transaction
+from trac.db_default import schema as default_schema
+from trac.db.schema import Column, Table
 from trac.test import EnvironmentStub, Mock
 from trac.util.concurrency import ThreadLocal
 
@@ -287,6 +288,9 @@ class StringsTestCase(unittest.TestCase):
     def setUp(self):
         self.env = EnvironmentStub()
 
+    def tearDown(self):
+        self.env.reset_db()
+
     def test_insert_unicode(self):
         self.env.db_transaction(
                 "INSERT INTO system (name,value) VALUES (%s,%s)",
@@ -345,36 +349,96 @@ class StringsTestCase(unittest.TestCase):
 class ConnectionTestCase(unittest.TestCase):
     def setUp(self):
         self.env = EnvironmentStub()
+        self.schema = [
+            Table('HOURS', key='ID')[
+                Column('ID', auto_increment=True),
+                Column('AUTHOR')],
+            Table('blog', key='bid')[
+                Column('bid', auto_increment=True),
+                Column('author')
+            ]
+        ]
+        self.env.global_databasemanager.drop_tables(self.schema)
+        self.env.global_databasemanager.create_tables(self.schema)
 
     def tearDown(self):
+        self.env.global_databasemanager.drop_tables(self.schema)
         self.env.reset_db()
 
     def test_get_last_id(self):
-        id1 = id2 = None
         q = "INSERT INTO report (author) VALUES ('anonymous')"
         with self.env.db_transaction as db:
             cursor = db.cursor()
             cursor.execute(q)
             # Row ID correct before...
             id1 = db.get_last_id(cursor, 'report')
-            self.assertNotEqual(0, id1)
             db.commit()
             cursor.execute(q)
             # ... and after commit()
             db.commit()
             id2 = db.get_last_id(cursor, 'report')
-            self.assertEqual(id1 + 1, id2)
 
-    def test_update_sequence(self):
-        self.env.db_transaction(
-            "INSERT INTO report (id, author) VALUES (42, 'anonymous')")
+        self.assertNotEqual(0, id1)
+        self.assertEqual(id1 + 1, id2)
+
+    def test_update_sequence_default_column(self):
         with self.env.db_transaction as db:
+            db("INSERT INTO report (id, author) VALUES (42, 'anonymous')")
             cursor = db.cursor()
             db.update_sequence(cursor, 'report', 'id')
+
         self.env.db_transaction(
             "INSERT INTO report (author) VALUES ('next-id')")
+
         self.assertEqual(43, self.env.db_query(
                 "SELECT id FROM report WHERE author='next-id'")[0][0])
+
+    def test_update_sequence_nondefault_column(self):
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            cursor.execute(
+                "INSERT INTO blog (bid, author) VALUES (42, 'anonymous')")
+            db.update_sequence(cursor, 'blog', 'bid')
+
+        self.env.db_transaction(
+            "INSERT INTO blog (author) VALUES ('next-id')")
+
+        self.assertEqual(43, self.env.db_query(
+            "SELECT bid FROM blog WHERE author='next-id'")[0][0])
+
+    def test_identifiers_need_quoting(self):
+        """Test for regression described in comment:4:ticket:11512."""
+        with self.env.db_transaction as db:
+            db("INSERT INTO %s (%s, %s) VALUES (42, 'anonymous')"
+               % (db.quote('HOURS'), db.quote('ID'), db.quote('AUTHOR')))
+            cursor = db.cursor()
+            db.update_sequence(cursor, 'HOURS', 'ID')
+
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            cursor.execute(
+                "INSERT INTO %s (%s) VALUES ('next-id')"
+                % (db.quote('HOURS'), db.quote('AUTHOR')))
+            last_id = db.get_last_id(cursor, 'HOURS', 'ID')
+
+        self.assertEqual(43, last_id)
+
+    def test_table_names(self):
+        schema = default_schema + self.schema
+        with self.env.db_query as db:
+            db_tables = db.get_table_names()
+            self.assertEqual(len(schema), len(db_tables))
+            for table in schema:
+                self.assertIn(table.name, db_tables)
+
+    def test_get_column_names(self):
+        schema = default_schema + self.schema
+        with self.env.db_transaction as db:
+            for table in schema:
+                db_columns = db.get_column_names(table.name)
+                self.assertEqual(len(table.columns), len(db_columns))
+                for column in table.columns:
+                    self.assertIn(column.name, db_columns)
 
 
 def suite():

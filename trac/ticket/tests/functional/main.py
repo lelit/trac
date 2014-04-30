@@ -20,8 +20,8 @@ from datetime import datetime, timedelta
 from trac.admin.tests.functional import AuthorizationTestCaseSetup
 from trac.test import locale_en
 from trac.tests.functional import *
-from trac.util.datefmt import utc, localtz, format_date, format_datetime, \
-                              pretty_timedelta
+from trac.util import create_file
+from trac.util.datefmt import utc, localtz, format_date, format_datetime
 from trac.util.text import to_utf8
 
 try:
@@ -130,6 +130,53 @@ class TestTicketNoSummary(FunctionalTwillTestCaseSetup):
         tc.find('Tickets must contain a summary.')
         tc.find('Create New Ticket')
         tc.find('ticket not yet created')
+
+
+class TestTicketManipulator(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        plugin_name = self.__class__.__name__
+        env = self._testenv.get_trac_environment()
+        env.config.set('components', plugin_name + '.*', 'enabled')
+        env.config.save()
+        create_file(os.path.join(env.path, 'plugins', plugin_name + '.py'),
+"""\
+from genshi.builder import tag
+from trac.core import Component, implements
+from trac.ticket.api import ITicketManipulator
+from trac.util.translation import tag_
+
+
+class TicketManipulator(Component):
+    implements(ITicketManipulator)
+
+    def prepare_ticket(self, req, ticket, fields, actions):
+        pass
+
+    def validate_ticket(self, req, ticket):
+        field = 'reporter'
+        yield None, tag_("A ticket with the summary %(summary)s"
+                         " already exists.",
+                          summary=tag.em("Testing ticket manipulator"))
+        yield field, tag_("The ticket %(field)s is %(status)s.",
+                          field=tag.strong(field),
+                          status=tag.em("invalid"))
+""")
+        self._testenv.restart()
+
+        try:
+            self._tester.go_to_front()
+            tc.follow("New Ticket")
+            tc.formvalue('propertyform', 'field-description',
+                         "Testing ticket manipulator")
+            tc.submit('submit')
+            tc.url(self._tester.url + '/newticket$')
+            tc.find("A ticket with the summary <em>Testing ticket "
+                    "manipulator</em> already exists.")
+            tc.find("The ticket field <strong>reporter</strong> is invalid:"
+                    " The ticket <strong>reporter</strong> is <em>invalid</em>.")
+        finally:
+            env.config.set('components', plugin_name + '.*', 'disabled')
+            env.config.save()
 
 
 class TestTicketAltFormats(FunctionalTestCaseSetup):
@@ -2491,6 +2538,17 @@ class RegressionTestTicket11176(FunctionalTestCaseSetup):
             self._testenv.disable_authz_permpolicy()
 
 
+class RegressionTestTicket11590(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Test for regression of http://trac.edgewall.org/ticket/11590"""
+        report_id = self._tester.create_report('#11590', 'SELECT 1',
+                                               '[. this report]')
+        self._tester.go_to_view_tickets()
+        tc.notfind(internal_error)
+        tc.find('<a class="report" href="[^>"]*?/report/%s">this report</a>' %
+                report_id)
+
+
 def functionalSuite(suite=None):
     if not suite:
         import trac.tests.functional
@@ -2500,6 +2558,7 @@ def functionalSuite(suite=None):
     suite.addTest(TestTicketAddAttachment())
     suite.addTest(TestTicketPreview())
     suite.addTest(TestTicketNoSummary())
+    suite.addTest(TestTicketManipulator())
     suite.addTest(TestTicketAltFormats())
     suite.addTest(TestTicketCSVFormat())
     suite.addTest(TestTicketTabFormat())
@@ -2614,6 +2673,7 @@ def functionalSuite(suite=None):
     suite.addTest(RegressionTestTicket10772())
     suite.addTest(RegressionTestTicket11028())
     suite.addTest(RegressionTestTicket11153())
+    suite.addTest(RegressionTestTicket11590())
     if ConfigObj:
         suite.addTest(RegressionTestTicket11176())
     else:

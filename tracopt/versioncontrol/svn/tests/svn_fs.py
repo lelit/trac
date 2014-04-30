@@ -17,8 +17,6 @@
 from datetime import datetime
 import new
 import os.path
-import stat
-import shutil
 import tempfile
 import unittest
 
@@ -30,17 +28,17 @@ try:
 except ImportError:
     has_svn = False
 
+import trac.tests.compat
 from trac.test import EnvironmentStub, TestSetup
-from trac.tests import compat
 from trac.core import TracError
 from trac.resource import Resource, resource_exists
 from trac.util.concurrency import get_thread_id
 from trac.util.datefmt import utc
-from trac.versioncontrol import DbRepositoryProvider, Changeset, Node, \
-                                NoSuchChangeset
+from trac.versioncontrol.api import DbRepositoryProvider, Changeset, Node, \
+                                    NoSuchChangeset, RepositoryManager
 from tracopt.versioncontrol.svn import svn_fs
 
-REPOS_PATH = os.path.join(tempfile.gettempdir(), 'trac-svnrepos')
+REPOS_PATH = None
 REPOS_NAME = 'repo'
 URL = 'svn://test'
 
@@ -61,8 +59,6 @@ class SubversionRepositoryTestSetup(TestSetup):
         pool = core.svn_pool_create(None)
         dumpstream = None
         try:
-            if os.path.exists(REPOS_PATH):
-                print 'trouble ahead with db/rep-cache.db... see #8278'
             r = repos.svn_repos_create(REPOS_PATH, '', '', None, None, pool)
             if hasattr(repos, 'svn_repos_load_fs2'):
                 repos.svn_repos_load_fs2(r, dumpfile, StringIO(),
@@ -1024,6 +1020,10 @@ class SubversionRepositoryTestCase(unittest.TestCase):
 
 
     def tearDown(self):
+        self.repos.close()
+        self.repos = None
+        # clear cached repositories to avoid TypeError on termination (#11505)
+        RepositoryManager(self.env).reload_repositories()
         self.env.reset_db()
         # needed to avoid issue with 'WindowsError: The process cannot access
         # the file ... being used by another process: ...\rep-cache.db'
@@ -1046,11 +1046,16 @@ class SvnCachedRepositoryTestCase(unittest.TestCase):
         self.env.reset_db()
         self.repos.close()
         self.repos = None
+        # clear cached repositories to avoid TypeError on termination (#11505)
+        RepositoryManager(self.env).reload_repositories()
 
 
 def suite():
+    global REPOS_PATH
     suite = unittest.TestSuite()
     if has_svn:
+        REPOS_PATH = tempfile.mkdtemp(prefix='trac-svnrepos-')
+        os.rmdir(REPOS_PATH)
         tests = [(NormalTests, ''),
                  (ScopedTests, u'/tête'),
                  (RecentPathScopedTests, u'/tête/dir1'),

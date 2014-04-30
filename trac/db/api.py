@@ -14,14 +14,13 @@
 #
 # Author: Christopher Lenz <cmlenz@gmx.de>
 
-from __future__ import with_statement
-
 import os
 import time
 import urllib
 
 from trac.config import BoolOption, IntOption, Option
 from trac.core import *
+from trac.db.schema import Table
 from trac.util.concurrency import ThreadLocal
 from trac.util.text import unicode_passwd
 from trac.util.translation import _
@@ -249,6 +248,31 @@ class DatabaseManager(Component):
         from trac.db_default import schema
         args['schema'] = schema
         connector.init_db(**args)
+
+    def create_tables(self, schema):
+        """Create the specified tables.
+
+        :param schema: an iterable of table objects.
+
+        :since: version 1.0.2
+        """
+        connector = self.get_connector()[0]
+        with self.env.db_transaction as db:
+            for table in schema:
+                for sql in connector.to_sql(table):
+                    db(sql)
+
+    def drop_tables(self, schema):
+        """Drop the specified tables.
+
+        :param schema: an iterable of `Table` objects or table names.
+
+        :since: version 1.0.2
+        """
+        with self.env.db_transaction as db:
+            for table in schema:
+                table_name = table.name if isinstance(table, Table) else table
+                db.drop_table(table_name)
 
     def get_connection(self, readonly=False):
         """Get a database connection from the pool.

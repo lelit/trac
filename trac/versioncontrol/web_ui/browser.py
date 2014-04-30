@@ -27,12 +27,11 @@ from trac.mimeview.api import IHTMLPreviewAnnotator, Mimeview, is_binary
 from trac.perm import IPermissionRequestor
 from trac.resource import Resource, ResourceNotFound
 from trac.util import as_bool, embedded_numbers
-from trac.util.compat import cleandoc
 from trac.util.datefmt import http_date, to_datetime, utc
 from trac.util.html import escape, Markup
 from trac.util.text import exception_to_unicode, shorten_line
 from trac.util.translation import _, cleandoc_
-from trac.web.api import IRequestHandler, Request, RequestDone
+from trac.web.api import IRequestHandler, RequestDone
 from trac.web.chrome import (INavigationContributor, add_ctxtnav, add_link,
                              add_script, add_stylesheet, prevnext_nav,
                              web_context)
@@ -366,6 +365,7 @@ class BrowserModule(Component):
         # Find node for the requested path/rev
         context = web_context(req)
         node = None
+        changeset = None
         display_rev = lambda rev: rev
         if repos:
             try:
@@ -378,6 +378,12 @@ class BrowserModule(Component):
             except NoSuchChangeset, e:
                 raise ResourceNotFound(e.message,
                                        _('Invalid changeset number'))
+            if node:
+                try:
+                    # use changeset instance to retrieve branches and tags
+                    changeset = repos.get_changeset(node.rev)
+                except NoSuchChangeset:
+                    pass
 
             context = context.child(repos.resource.child('source', path,
                                                    version=rev_or_latest))
@@ -413,7 +419,7 @@ class BrowserModule(Component):
             'context': context, 'reponame': reponame, 'repos': repos,
             'repoinfo': all_repositories.get(reponame or ''),
             'path': path, 'rev': node and node.rev, 'stickyrev': rev,
-            'display_rev': display_rev,
+            'display_rev': display_rev, 'changeset': changeset,
             'created_path': node and node.created_path,
             'created_rev': node and node.created_rev,
             'properties': properties_data,

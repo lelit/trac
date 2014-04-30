@@ -313,6 +313,24 @@ class SQLiteConnection(ConnectionWrapper):
     def concat(self, *args):
         return '||'.join(args)
 
+    def drop_table(self, table):
+        cursor = self.cursor()
+        cursor.execute("DROP TABLE IF EXISTS " + self.quote(table))
+
+    def get_column_names(self, table):
+        cursor = self.cnx.cursor()
+        rows = cursor.execute("PRAGMA table_info(%s)"
+                              % self.quote(table))
+        return [row[1] for row in rows]
+
+    def get_last_id(self, cursor, table, column='id'):
+        return cursor.lastrowid
+
+    def get_table_names(self):
+        rows = self.execute("""
+            SELECT name FROM sqlite_master WHERE type='table'""")
+        return [row[0] for row in rows]
+
     def like(self):
         """Return a case-insensitive LIKE clause."""
         if sqlite_version >= (3, 1, 0):
@@ -329,9 +347,6 @@ class SQLiteConnection(ConnectionWrapper):
     def quote(self, identifier):
         """Return the quoted identifier."""
         return "`%s`" % identifier.replace('`', '``')
-
-    def get_last_id(self, cursor, table, column='id'):
-        return cursor.lastrowid
 
     def update_sequence(self, cursor, table, column='id'):
         # SQLite handles sequence updates automagically

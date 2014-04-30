@@ -12,17 +12,15 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 import os
 import tempfile
 import time
 import unittest
 
+import trac.tests.compat
 from trac.config import *
 from trac.core import Component, Interface, implements
 from trac.test import Configuration, EnvironmentStub
-from trac.tests import compat
 from trac.util import create_file
 
 

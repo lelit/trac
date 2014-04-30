@@ -11,19 +11,16 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-from __future__ import with_statement
-
 from ConfigParser import RawConfigParser
 import shutil
 import tempfile
 import unittest
 
-from trac.tests import compat
+import trac.tests.compat
 from trac import db_default
 from trac.core import ComponentManager
 from trac.env import Environment
 from trac.test import EnvironmentStub
-from trac.util import read_file
 
 
 class EnvironmentCreatedWithoutData(Environment):
