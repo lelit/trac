@@ -262,10 +262,11 @@ In [changeset:"%s"]:
             self.log.info("%s doesn't have TICKET_MODIFY permission for #%d",
                           changeset.author, ticket.id)
             return False
-        ticket['status'] = self.close_status
-        ticket['resolution'] = 'fixed'
-        if not ticket['owner']:
-            ticket['owner'] = changeset.author
+        if ticket['status'] not in ('closed', self.close_status):
+            ticket['status'] = self.close_status
+            ticket['resolution'] = 'fixed'
+            if not ticket['owner']:
+                ticket['owner'] = changeset.author
 
     def cmd_refs(self, ticket, changeset, perm):
         if self.check_perms and not 'TICKET_APPEND' in perm:
