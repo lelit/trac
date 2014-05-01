@@ -624,7 +624,7 @@ class GitNode(Node):
         # Temporary fix to handle git submodules (related to #10603):
         # they do not contain entries. Without this, the browser shows
         # an endless hierarchy where the submodule directory contains itself
-        if not self.isdir or self.fs_perm.startswith('16'):
+        if not self.isdir or self.fs_perm and self.fs_perm.startswith('16'):
             return
 
         with self.repos.git.get_historian(self.rev,
