@@ -261,11 +261,21 @@ In [changeset:"%s"]:
     # Command-specific behavior
     # The ticket isn't updated if all extracted commands return False.
 
+    def _changeset_already_annotated(self, ticket, changeset):
+        # Warning: must match with the make_ticket_comment() template above!
+        signature = 'In [changeset:"%s' % changeset.rev
+        for time, author, field, oldvalue, newvalue, permanent in ticket.get_changelog():
+            if field == 'comment' and newvalue.startswith(signature):
+                return True
+        return False
+
     def cmd_close(self, ticket, changeset, perm):
         authname = self._authname(changeset)
         if self.check_perms and not 'TICKET_MODIFY' in perm:
             self.log.info("%s doesn't have TICKET_MODIFY permission for #%d",
                           authname, ticket.id)
+            return False
+        if self._changeset_already_annotated(ticket, changeset):
             return False
         if ticket['status'] not in ('closed', self.close_status):
             ticket['status'] = self.close_status
@@ -277,6 +287,8 @@ In [changeset:"%s"]:
         if self.check_perms and not 'TICKET_APPEND' in perm:
             self.log.info("%s doesn't have TICKET_APPEND permission for #%d",
                           self._authname(changeset), ticket.id)
+            return False
+        if self._changeset_already_annotated(ticket, changeset):
             return False
 
 
