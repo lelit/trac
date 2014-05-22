@@ -134,7 +134,7 @@ class CommitTicketUpdater(Component):
         """Status of the ticket set by the close command.""")
 
     ticket_prefix = '(?:#|(?:ticket|issue|bug)[: ]?)'
-    ticket_reference = ticket_prefix + '[0-9]+'
+    ticket_reference = ticket_prefix + '[0-9]+(?:#comment:[0-9]+)?'
     ticket_command = (r'(?P<action>[A-Za-z]*)\s*.?\s*'
                       r'(?P<ticket>%s(?:(?:[, &]*|[ ]?and[ ]?)%s)*)' %
                       (ticket_reference, ticket_reference))
