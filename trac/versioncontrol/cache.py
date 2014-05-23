@@ -87,12 +87,10 @@ class CachedRepository(Repository):
         old_cset = None
 
         with self.env.db_transaction as db:
-            for time, author, message in db("""
-                    SELECT time, author, message FROM revision
-                    WHERE repos=%s AND rev=%s
-                    """, (self.id, srev)):
-                old_cset = Changeset(self.repos, cset.rev, message, author,
-                                     from_utimestamp(time))
+            try:
+                old_cset = CachedChangeset(self, cset.rev, self.env)
+            except NoSuchChangeset:
+                old_cset = None
             if old_cset:
                 db("""UPDATE revision SET time=%s, author=%s, message=%s
                       WHERE repos=%s AND rev=%s
@@ -234,7 +232,7 @@ class CachedRepository(Repository):
                     try:
                         # steps 1. and 2.
                         self._insert_changeset(db, next_youngest, cset)
-                    except Exception, e: # *another* 1.1. resync attempt won
+                    except Exception as e: # *another* 1.1. resync attempt won
                         self.log.warning('Revision %s already cached: %r',
                                          next_youngest, e)
                         # the other resync attempts is also

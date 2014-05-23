@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2003-2009 Edgewall Software
+# Copyright (C) 2003-2014 Edgewall Software
 # Copyright (C) 2003-2005 Jonas Borgström <jonas@edgewall.com>
 # Copyright (C) 2005-2006 Christian Boos <cboos@edgewall.org>
 # All rights reserved.
@@ -18,8 +18,8 @@
 
 import re
 
-from genshi.core import Markup
 from genshi.builder import tag
+from genshi.core import Markup
 
 from trac.config import IntOption, ListOption
 from trac.core import *
@@ -31,7 +31,7 @@ from trac.util.translation import _
 from trac.versioncontrol.api import Changeset, RepositoryManager
 from trac.versioncontrol.web_ui.changeset import ChangesetModule
 from trac.versioncontrol.web_ui.util import *
-from trac.web import IRequestHandler
+from trac.web.api import IRequestHandler
 from trac.web.chrome import (Chrome, INavigationContributor, add_ctxtnav,
                              add_link, add_script, add_script_data,
                              add_stylesheet, auth_link, web_context)
@@ -89,8 +89,12 @@ class LogModule(Component):
         reponame, repos, path = rm.get_repository_by_path(path)
 
         if not repos:
-            raise ResourceNotFound(_("Repository '%(repo)s' not found",
-                                   repo=reponame))
+            if path == '/':
+                raise TracError(_("No repository specified and no default"
+                                  " repository configured."))
+            else:
+                raise ResourceNotFound(_("Repository '%(repo)s' not found",
+                                         repo=reponame or path.strip('/')))
 
         if reponame != repos.reponame:  # Redirect alias
             qs = req.query_string
@@ -422,7 +426,7 @@ class LogModule(Component):
                 errmsg = _("Repository '%(repo)s' not found", repo=reponame)
             else:
                 errmsg = _("No default repository defined")
-        except TracError, e:
+        except TracError as e:
             errmsg = to_unicode(e)
         return tag.a(label, class_='missing source', title=errmsg)
 

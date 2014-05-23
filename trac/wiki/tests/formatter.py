@@ -205,7 +205,7 @@ class WikiTestCase(unittest.TestCase):
         v = strip_line_ws(v, leading=False)
         try:
             self.assertEqual(self.correct, v)
-        except AssertionError, e:
+        except AssertionError as e:
             msg = to_unicode(e)
             match = re.match(r"u?'(.*)' != u?'(.*)'", msg)
             if match:
@@ -308,7 +308,7 @@ def suite(data=None, setup=None, file=__file__, teardown=None, context=None):
                 data = open(testfile, 'r').read().decode('utf-8')
                 add_test_cases(data, testfile)
             else:
-                print 'no ', testfile
+                print('no ' + testfile)
     return suite
 
 if __name__ == '__main__':

@@ -25,6 +25,7 @@ from trac.core import *
 from trac.util import TracError, shorten_line
 from trac.util.datefmt import FixedOffset, to_timestamp, format_datetime
 from trac.util.text import to_unicode, exception_to_unicode
+from trac.util.translation import _
 from trac.versioncontrol.api import Changeset, Node, Repository, \
                                     IRepositoryConnector, NoSuchChangeset, \
                                     NoSuchNode, IRepositoryProvider
@@ -133,7 +134,7 @@ class GitConnector(Component):
 
         try:
             self._version = PyGIT.Storage.git_version(git_bin=self.git_bin)
-        except PyGIT.GitError, e:
+        except PyGIT.GitError as e:
             self.log.error("GitError: " + str(e))
 
         if self._version:
@@ -170,7 +171,7 @@ class GitConnector(Component):
             return tag.a(label, class_='changeset',
                          title=shorten_line(changeset.message),
                          href=formatter.href.changeset(sha, repos.reponame))
-        except Exception, e:
+        except Exception as e:
             return tag.a(label, class_='missing changeset',
                          title=to_unicode(e), rel='nofollow')
 
@@ -318,7 +319,7 @@ class CsetPropertyRenderer(Component):
                              title=shorten_line(cset.message),
                              href=context.href.changeset(sha, repos.reponame))
 
-            except Exception, e:
+            except Exception as e:
                 return tag.a(sha, class_='missing changeset',
                              title=to_unicode(e), rel='nofollow')
 
@@ -402,7 +403,7 @@ class GitRepository(Repository):
                                             git_bin=git_bin,
                                             git_fs_encoding=git_fs_encoding) \
                             .getInstance()
-        except PyGIT.GitError, e:
+        except PyGIT.GitError as e:
             log.error(exception_to_unicode(e))
             raise TracError("%s does not appear to be a Git "
                             "repository." % path)
@@ -424,6 +425,9 @@ class GitRepository(Repository):
     def get_youngest_rev(self):
         self._check_rev_cache()
         return self.git.youngest_rev()
+
+    def get_path_history(self, path, rev=None, limit=None):
+        raise TracError(_("Unsupported \"Show only adds and deletes\""))
 
     def get_oldest_rev(self):
         self._check_rev_cache()

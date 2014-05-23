@@ -14,6 +14,7 @@
 #
 # Author: Jonas Borgström <jonas@edgewall.com>
 
+from abc import ABCMeta, abstractmethod
 try:
     from base64 import b64decode, b64encode
 except ImportError:
@@ -185,8 +186,7 @@ class LoginModule(Component):
                                              or req.base_path or '/'
         if self.env.secure_cookies:
             req.outcookie['trac_auth']['secure'] = True
-        if sys.version_info >= (2, 6):
-            req.outcookie['trac_auth']['httponly'] = True
+        req.outcookie['trac_auth']['httponly'] = True
         if self.auth_cookie_lifetime > 0:
             req.outcookie['trac_auth']['expires'] = self.auth_cookie_lifetime
 
@@ -225,8 +225,7 @@ class LoginModule(Component):
         req.outcookie['trac_auth']['expires'] = -10000
         if self.env.secure_cookies:
             req.outcookie['trac_auth']['secure'] = True
-        if sys.version_info >= (2, 6):
-            req.outcookie['trac_auth']['httponly'] = True
+        req.outcookie['trac_auth']['httponly'] = True
 
     def _cookie_to_name(self, req, cookie):
         # This is separated from _get_name_for_cookie(), because the
@@ -278,8 +277,11 @@ class LoginModule(Component):
 
 class HTTPAuthentication(object):
 
+    __metaclass__ = ABCMeta
+
+    @abstractmethod
     def do_auth(self, environ, start_response):
-        raise NotImplementedError
+        pass
 
 
 class PasswordFileAuthentication(HTTPAuthentication):

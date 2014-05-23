@@ -118,13 +118,15 @@ class ILegacyAttachmentPolicyDelegate(Interface):
 
 class Attachment(object):
 
+    realm = 'attachment'
+
     def __init__(self, env, parent_realm_or_attachment_resource,
                  parent_id=None, filename=None, db=None):
         if isinstance(parent_realm_or_attachment_resource, Resource):
             self.resource = parent_realm_or_attachment_resource
         else:
             self.resource = Resource(parent_realm_or_attachment_resource,
-                                     parent_id).child('attachment', filename)
+                                     parent_id).child(self.realm, filename)
         self.env = env
         self.parent_realm = self.resource.parent.realm
         self.parent_id = unicode(self.resource.parent.id)
@@ -225,7 +227,7 @@ class Attachment(object):
             if os.path.isfile(path):
                 try:
                     os.unlink(path)
-                except OSError, e:
+                except OSError as e:
                     self.env.log.error("Failed to delete attachment "
                                        "file %s: %s",
                                        path,
@@ -269,7 +271,7 @@ class Attachment(object):
             if os.path.isfile(path):
                 try:
                     os.rename(path, new_path)
-                except OSError, e:
+                except OSError as e:
                     self.env.log.error("Failed to move attachment file %s: %s",
                                        path,
                                        exception_to_unicode(e, traceback=True))
@@ -278,7 +280,7 @@ class Attachment(object):
 
         old_realm, old_id = self.parent_realm, self.parent_id
         self.parent_realm, self.parent_id = new_realm, new_id
-        self.resource = Resource(new_realm, new_id).child('attachment',
+        self.resource = Resource(new_realm, new_id).child(self.realm,
                                                           self.filename)
 
         self.env.log.info("Attachment reparented: %s" % self.title)
@@ -371,7 +373,7 @@ class Attachment(object):
         if attachment_dir:
             try:
                 os.rmdir(attachment_dir)
-            except OSError, e:
+            except OSError as e:
                 env.log.error("Can't delete attachment directory %s: %s",
                               attachment_dir,
                               exception_to_unicode(e, traceback=True))
@@ -388,7 +390,7 @@ class Attachment(object):
         if attachment_dir:
             try:
                 os.rmdir(attachment_dir)
-            except OSError, e:
+            except OSError as e:
                 env.log.error("Can't delete attachment directory %s: %s",
                               attachment_dir,
                               exception_to_unicode(e, traceback=True))
@@ -413,7 +415,7 @@ class Attachment(object):
             path = os.path.join(dir, self._get_hashed_filename(filename))
             try:
                 return filename, os.fdopen(os.open(path, flags, 0666), 'w')
-            except OSError, e:
+            except OSError as e:
                 if e.errno != errno.EEXIST:
                     raise
                 idx += 1

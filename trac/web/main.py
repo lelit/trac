@@ -16,6 +16,8 @@
 # Author: Christopher Lenz <cmlenz@gmx.de>
 #         Matthew Good <trac@matt-good.net>
 
+from __future__ import print_function
+
 import cgi
 import dircache
 import fnmatch
@@ -134,7 +136,7 @@ class RequestDispatcher(Component):
         for authenticator in self.authenticators:
             try:
                 authname = authenticator.authenticate(req)
-            except TracError, e:
+            except TracError as e:
                 self.log.error("Can't authenticate using %s: %s",
                                authenticator.__class__.__name__,
                                exception_to_unicode(e, traceback=True))
@@ -184,7 +186,7 @@ class RequestDispatcher(Component):
                     # was found or not
                     chosen_handler = \
                         self._pre_process_request(req, chosen_handler)
-                except TracError, e:
+                except TracError as e:
                     raise HTTPInternalError(e)
                 if not chosen_handler:
                     if req.path_info.endswith('/'):
@@ -251,16 +253,16 @@ class RequestDispatcher(Component):
                     self._post_process_request(req)
                 except RequestDone:
                     raise
-                except Exception, e:
+                except Exception as e:
                     self.log.error("Exception caught while post-processing"
                                    " request: %s",
                                    exception_to_unicode(e, traceback=True))
                 raise err[0], err[1], err[2]
-        except PermissionError, e:
+        except PermissionError as e:
             raise HTTPForbidden(e)
-        except ResourceNotFound, e:
+        except ResourceNotFound as e:
             raise HTTPNotFound(e)
-        except TracError, e:
+        except TracError as e:
             raise HTTPInternalError(e)
 
     # Internal methods
@@ -287,7 +289,7 @@ class RequestDispatcher(Component):
     def _get_session(self, req):
         try:
             return Session(self.env, req)
-        except TracError, e:
+        except TracError as e:
             self.log.error("can't retrieve session: %s",
                            exception_to_unicode(e))
             return FakeSession()
@@ -335,8 +337,7 @@ class RequestDispatcher(Component):
             req.outcookie['trac_form_token']['path'] = req.base_path or '/'
             if self.env.secure_cookies:
                 req.outcookie['trac_form_token']['secure'] = True
-            if sys.version_info >= (2, 6):
-                req.outcookie['trac_form_token']['httponly'] = True
+            req.outcookie['trac_form_token']['httponly'] = True
             return req.outcookie['trac_form_token'].value
 
     def _get_use_xsendfile(self, req):
@@ -489,7 +490,7 @@ def dispatch_request(environ, start_response):
             if env.webfrontend:
                 env.systeminfo.append((env.webfrontend,
                                        environ['trac.web.version']))
-    except Exception, e:
+    except Exception as e:
         env_error = e
 
     req = RequestWithSession(environ, start_response)
@@ -528,10 +529,10 @@ def _dispatch_request(req, env, env_error):
         try:
             dispatcher = RequestDispatcher(env)
             dispatcher.dispatch(req)
-        except RequestDone, req_done:
+        except RequestDone as req_done:
             resp = req_done.iterable
         resp = resp or req._response or []
-    except HTTPException, e:
+    except HTTPException as e:
         _send_user_error(req, env, e)
     except Exception:
         send_internal_error(env, req, sys.exc_info())
@@ -688,7 +689,7 @@ def send_project_index(environ, start_response, parent_dir=None,
                     'description': env.project_description,
                     'href': href(env_name)
                 }
-            except Exception, e:
+            except Exception as e:
                 proj = {'name': env_name, 'description': to_unicode(e)}
             projects.append(proj)
         projects.sort(lambda x, y: cmp(x['name'].lower(), y['name'].lower()))
@@ -751,9 +752,9 @@ def get_environments(environ, warn=False):
         env_name = os.path.split(env_path)[1]
         if env_name in envs:
             if warn:
-                print >> sys.stderr, ('Warning: Ignoring project "%s" since '
-                                      'it conflicts with project "%s"'
-                                      % (env_path, envs[env_name]))
+                print('Warning: Ignoring project "%s" since it conflicts with'
+                      ' project "%s"' % (env_path, envs[env_name]),
+                      file=sys.stderr)
         else:
             envs[env_name] = env_path
     return envs

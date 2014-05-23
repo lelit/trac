@@ -16,8 +16,9 @@
 import os
 import re
 import smtplib
-from subprocess import Popen, PIPE
 import time
+from abc import ABCMeta, abstractmethod
+from subprocess import Popen, PIPE
 
 from genshi.builder import tag
 
@@ -155,7 +156,7 @@ class SmtpEmailSender(Component):
                       % (self.smtp_server, self.smtp_port, recipients))
         try:
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-        except smtplib.socket.error, e:
+        except smtplib.socket.error as e:
             raise ConfigurationError(
                 tag_("SMTP server connection error (%(error)s). Please "
                      "modify %(option1)s or %(option2)s in your "
@@ -215,7 +216,7 @@ class SendmailEmailSender(Component):
         try:
             child = Popen(cmdline, bufsize=-1, stdin=PIPE, stdout=PIPE,
                           stderr=PIPE, close_fds=close_fds)
-        except OSError, e:
+        except OSError as e:
             raise ConfigurationError(
                 tag_("Sendmail error (%(error)s). Please modify %(option)s "
                      "in your configuration.",
@@ -232,6 +233,7 @@ class Notify(object):
 
     Subclass this to implement different methods.
     """
+    __metaclass__ = ABCMeta
 
     def __init__(self, env):
         self.env = env
@@ -250,13 +252,14 @@ class Notify(object):
         self.send(torcpts, ccrcpts)
         self.finish_send()
 
+    @abstractmethod
     def get_recipients(self, resid):
         """Return a pair of list of subscribers to the resource 'resid'.
 
         First list represents the direct recipients (To:), second list
         represents the recipients in carbon copy (Cc:).
         """
-        raise NotImplementedError
+        pass
 
     def begin_send(self):
         """Prepare to send messages.
@@ -264,9 +267,10 @@ class Notify(object):
         Called before sending begins.
         """
 
+    @abstractmethod
     def send(self, torcpts, ccrcpts):
         """Send message to recipients."""
-        raise NotImplementedError
+        pass
 
     def finish_send(self):
         """Clean up after sending all messages.

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2003-2009 Edgewall Software
+# Copyright (C) 2003-2014 Edgewall Software
 # Copyright (C) 2003-2005 Jonas Borgström <jonas@edgewall.com>
 # Copyright (C) 2005-2007 Christian Boos <cboos@edgewall.org>
 # All rights reserved.
@@ -72,7 +72,7 @@ def get_path_links(href, reponame, path, rev, order=None, desc=None):
 def get_existing_node(req, repos, path, rev):
     try:
         return repos.get_node(path, rev)
-    except NoSuchNode, e:
+    except NoSuchNode as e:
         # TRANSLATOR: You can 'search' in the repository history... (link)
         search_a = tag.a(_("search"),
                          href=req.href.log(repos.reponame or None, path,
@@ -136,13 +136,13 @@ def make_log_graph(repos, revs):
             column = active.index(rev)
             vertices.append((column, threads.index(active_thread[column])))
 
-            next_rev = revs.next() # Raises StopIteration when no more revs
+            next_rev = revs.next()  # Raises StopIteration when no more revs
             next = active[:]
             parents = list(repos.parent_revs(rev))
 
             # Replace current item with parents not already present
             new_parents = [p for p in parents if p not in active]
-            next[column : column + 1] = new_parents
+            next[column:column + 1] = new_parents
 
             # Add edges to parents
             for col, (r, thread) in enumerate(izip(active, active_thread)):
@@ -162,8 +162,8 @@ def make_log_graph(repos, revs):
             else:
                 base = len(threads)
                 threads.extend([[0, column + 1 + i, line + 1]]
-                                for i in xrange(len(new_parents) - 1))
-                active_thread[column + 1 : column + 1] = threads[base:]
+                               for i in xrange(len(new_parents) - 1))
+                active_thread[column + 1:column + 1] = threads[base:]
 
             active = next
             line += 1

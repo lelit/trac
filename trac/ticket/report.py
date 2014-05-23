@@ -342,7 +342,7 @@ class ReportModule(Component):
         title, description, sql = self.get_report(id)
         try:
             args = self.get_var_args(req)
-        except ValueError, e:
+        except ValueError as e:
             raise TracError(_("Report failed: %(error)s", error=e))
 
         # If this is a saved custom query, redirect to the query module
@@ -371,7 +371,7 @@ class ReportModule(Component):
                 from trac.ticket.query import Query, QuerySyntaxError
                 query = Query.from_string(self.env, query[6:], report=id)
                 req.redirect(query.get_href(req))
-            except QuerySyntaxError, e:
+            except QuerySyntaxError as e:
                 req.redirect(req.href.report(id, action='edit',
                                              error=to_unicode(e)))
 
@@ -649,16 +649,6 @@ class ReportModule(Component):
                     args=", ".join(missing_args)))
             return 'report_view.html', data, None
 
-    def execute_report(self, req, db, id, sql, args):
-        """Execute given sql report (0.10 backward compatibility method)
-
-        :see: ``execute_paginated_report``
-        """
-        res = self.execute_paginated_report(req, db, id, sql, args)
-        if len(res) == 2:
-            raise res[0]
-        return res[:5]
-
     def execute_paginated_report(self, req, db, id, sql, args,
                                  limit=0, offset=0):
         sql, args, missing_args = self.sql_sub_vars(sql, args, db)
@@ -681,7 +671,7 @@ class ReportModule(Component):
             self.log.debug("Report {%d} SQL (count): %s", id, count_sql)
             try:
                 cursor.execute(count_sql, args)
-            except Exception, e:
+            except Exception as e:
                 self.log.warn('Exception caught while executing report: %r, '
                               'args %r%s', count_sql, args,
                               exception_to_unicode(e, traceback=True))
@@ -693,7 +683,7 @@ class ReportModule(Component):
             self.log.debug("Report {%d} SQL (col names): %s", id, colnames_sql)
             try:
                 cursor.execute(colnames_sql, args)
-            except Exception, e:
+            except Exception as e:
                 self.log.warn('Exception caught while executing report: %r, '
                               'args %r%s', colnames_sql, args,
                               exception_to_unicode(e, traceback=True))
@@ -747,7 +737,7 @@ class ReportModule(Component):
             self.log.debug("Report {%d} SQL (order + limit): %s", id, sql)
         try:
             cursor.execute(sql, args)
-        except Exception, e:
+        except Exception as e:
             self.log.warn('Exception caught while executing report: %r, args '
                           '%r%s',
                           sql, args, exception_to_unicode(e, traceback=True))
@@ -766,14 +756,18 @@ class ReportModule(Component):
         return cols, rows, num_items, missing_args, limit_offset
 
     def get_report(self, id):
-        for title, description, sql in self.env.db_query("""
-                SELECT title, description, query from report WHERE id=%s
-                """, (id,)):
-            break
+        try:
+            number = int(id)
+        except (ValueError, TypeError):
+            pass
         else:
-            raise ResourceNotFound(_("Report {%(num)s} does not exist.",
-                                     num=id), _("Invalid Report Number"))
-        return title, description, sql
+            for title, description, sql in self.env.db_query("""
+                    SELECT title, description, query from report WHERE id=%s
+                    """, (number,)):
+                return title, description, sql
+
+        raise ResourceNotFound(_("Report {%(num)s} does not exist.", num=id),
+                               _("Invalid Report Number"))
 
     def get_var_args(self, req):
         # reuse somehow for #9574 (wiki vars)

@@ -89,7 +89,7 @@ try:
     from configobj import ConfigObj
 except ImportError:
     ConfigObj = None
-    print "SKIP: fine-grained permission tests (ConfigObj not installed)"
+    print("SKIP: fine-grained permission tests (ConfigObj not installed)")
 
 from trac.test import TestSetup, TestCaseSetup
 from trac.tests.contentgen import random_sentence, random_page, random_word, \
@@ -209,7 +209,7 @@ def suite():
         # The db tests should be last since the backup test occurs there.
         import trac.db.tests
         trac.db.tests.functionalSuite(suite)
-    except ImportError, e:
+    except ImportError as e:
         print("SKIP: functional tests (%s)" % e)
         # No tests to run, provide an empty suite.
         suite = unittest.TestSuite()

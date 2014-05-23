@@ -2125,7 +2125,7 @@ class RegressionTestTicket6912a(FunctionalTwillTestCaseSetup):
         try:
             self._tester.create_component(name='RegressionTestTicket6912a',
                                           owner='')
-        except twill.utils.ClientForm.ItemNotFoundError, e:
+        except twill.utils.ClientForm.ItemNotFoundError as e:
             raise twill.errors.TwillAssertionError(e)
 
 
@@ -2137,7 +2137,7 @@ class RegressionTestTicket6912b(FunctionalTwillTestCaseSetup):
         tc.follow('RegressionTestTicket6912b')
         try:
             tc.formvalue('modcomp', 'owner', '')
-        except twill.utils.ClientForm.ItemNotFoundError, e:
+        except twill.utils.ClientForm.ItemNotFoundError as e:
             raise twill.errors.TwillAssertionError(e)
         tc.submit('save', formname='modcomp')
         tc.find('RegressionTestTicket6912b</a>[ \n\t]*</td>[ \n\t]*'
@@ -2549,6 +2549,29 @@ class RegressionTestTicket11590(FunctionalTwillTestCaseSetup):
                 report_id)
 
 
+class RegressionTestTicket11618(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Test for regression of http://trac.edgewall.org/ticket/11618
+        fix for malformed `readonly="True"` attribute in milestone admin page
+        """
+        name = "11618Milestone"
+        self._tester.create_milestone(name)
+        try:
+            self._testenv.grant_perm('user', 'TICKET_ADMIN')
+            self._tester.go_to_front()
+            self._tester.logout()
+            self._tester.login('user')
+            tc.go(self._tester.url + "/admin/ticket/milestones/" + name)
+            tc.notfind('No administration panels available')
+            tc.find(' readonly="readonly"')
+            tc.notfind(' readonly="True"')
+        finally:
+            self._testenv.revoke_perm('user', 'TICKET_ADMIN')
+            self._tester.go_to_front()
+            self._tester.logout()
+            self._tester.login('admin')
+
+
 def functionalSuite(suite=None):
     if not suite:
         import trac.tests.functional
@@ -2674,10 +2697,11 @@ def functionalSuite(suite=None):
     suite.addTest(RegressionTestTicket11028())
     suite.addTest(RegressionTestTicket11153())
     suite.addTest(RegressionTestTicket11590())
+    suite.addTest(RegressionTestTicket11618())
     if ConfigObj:
         suite.addTest(RegressionTestTicket11176())
     else:
-        print "SKIP: RegressionTestTicket11176 (ConfigObj not installed)"
+        print("SKIP: RegressionTestTicket11176 (ConfigObj not installed)")
 
     return suite
 

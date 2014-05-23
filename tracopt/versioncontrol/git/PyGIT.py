@@ -119,7 +119,7 @@ class GitCore(object):
     def __execute(self, git_cmd, *cmd_args):
         """execute git command and return file-like object of stdout"""
 
-        #print >>sys.stderr, "DEBUG:", git_cmd, cmd_args
+        #print("DEBUG:", git_cmd, cmd_args, file=sys.stderr)
 
         p = self.__pipe(git_cmd, stdout=PIPE, stderr=PIPE, *cmd_args)
 
@@ -224,12 +224,18 @@ class StorageFactory(object):
                              self.__repo))
         return self.__inst
 
+    @classmethod
+    def _clean(cls):
+        """For testing purpose only"""
+        with StorageFactory.__dict_lock:
+            cls.__dict.clear()
+            cls.__dict_nonweak.clear()
+
 
 class Storage(object):
     """High-level wrapper around GitCore with in-memory caching"""
 
     __SREV_MIN = 4 # minimum short-rev length
-
 
     class RevCache(tuple):
         """RevCache(youngest_rev, oldest_rev, rev_dict, tag_set, srev_dict,
@@ -330,7 +336,7 @@ class Storage(object):
             result['v_compatible'] = split_version >= GIT_VERSION_MIN_REQUIRED
             return result
 
-        except Exception, e:
+        except Exception as e:
             raise GitError("Could not retrieve GIT version (tried to "
                            "execute/parse '%s --version' but got %s)"
                            % (git_bin, repr(e)))
@@ -398,7 +404,7 @@ class Storage(object):
         try:
             with open(head_file, 'rb') as f:
                 pass
-        except IOError, e:
+        except IOError as e:
             raise GitError("Make sure the Git repository '%s' is readable: %s"
                            % (git_dir, to_unicode(e)))
 
