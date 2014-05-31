@@ -30,8 +30,8 @@ from trac.core import Component, ComponentManager, implements, Interface, \
                       ExtensionPoint, TracBaseError, TracError
 from trac.db.api import (DatabaseManager, QueryContextManager,
                          TransactionContextManager, with_transaction)
-from trac.util import copytree, create_file, get_pkginfo, lazy, makedirs, \
-                      read_file
+from trac.util import arity, copytree, create_file, get_pkginfo, lazy, \
+                      makedirs, read_file
 from trac.util.compat import sha1
 from trac.util.concurrency import threading
 from trac.util.text import exception_to_unicode, path_to_unicode, printerr, \
@@ -72,15 +72,19 @@ class IEnvironmentSetupParticipant(Interface):
     def environment_created():
         """Called when a new Trac environment is created."""
 
-    def environment_needs_upgrade(db):
+    def environment_needs_upgrade(db=None):
         """Called when Trac checks whether the environment needs to be
         upgraded.
 
         Should return `True` if this participant needs an upgrade to
         be performed, `False` otherwise.
+
+        :since 1.1.2: the `db` parameter is deprecated and will be removed
+                      in Trac 1.3.1. A database connection should instead be
+                      obtained using a context manager.
         """
 
-    def upgrade_environment(db):
+    def upgrade_environment(db=None):
         """Actually perform an environment upgrade.
 
         Implementations of this method don't need to commit any
@@ -91,6 +95,10 @@ class IEnvironmentSetupParticipant(Interface):
         However, if the `upgrade_environment` consists of small,
         restartable, steps of upgrade, it can decide to commit on its
         own after each successful step.
+
+        :since 1.1.2: the `db` parameter is deprecated and will be removed
+                      in Trac 1.3.1. A database connection should instead be
+                      obtained using a context manager.
         """
 
 
@@ -273,6 +281,9 @@ class Environment(Component, ComponentManager):
         ComponentManager.__init__(self)
 
         self.path = path
+        # System info should be provided through ISystemInfoProvider rather
+        # than appending to systeminfo, which may be a private in a future
+        # release.
         self.systeminfo = []
 
         if create:
@@ -330,6 +341,8 @@ class Environment(Component, ComponentManager):
         from trac.util.datefmt import pytz
         if pytz is not None:
             yield 'pytz', pytz.__version__
+        if hasattr(self, 'webfrontend_version'):
+            yield self.webfrontend, self.webfrontend_version
 
     def component_activated(self, component):
         """Initialize additional member variables for components.
@@ -604,7 +617,7 @@ class Environment(Component, ComponentManager):
         # Create the database
         DatabaseManager(self).init_db()
 
-    def get_version(self, db=None, initial=False):
+    def get_version(self, initial=False):
         """Return the current version of the database.  If the
         optional argument `initial` is set to `True`, the version of
         the database used at the time of creation will be returned.
@@ -613,9 +626,6 @@ class Environment(Component, ComponentManager):
         return `False` which is "older" than any db version number.
 
         :since: 0.11
-
-        :since 1.0: deprecation warning: the `db` parameter is no
-                    longer used and will be removed in version 1.1.1
         """
         rows = self.db_query("""
                 SELECT value FROM system WHERE name='%sdatabase_version'
@@ -699,8 +709,11 @@ class Environment(Component, ComponentManager):
     def needs_upgrade(self):
         """Return whether the environment needs to be upgraded."""
         for participant in self.setup_participants:
+            args = ()
             with self.db_query as db:
-                if participant.environment_needs_upgrade(db):
+                if arity(participant.environment_needs_upgrade) == 1:
+                    args = (db,)
+                if participant.environment_needs_upgrade(*args):
                     self.log.warn("Component %s requires environment upgrade",
                                   participant)
                     return True
@@ -715,8 +728,11 @@ class Environment(Component, ComponentManager):
         """
         upgraders = []
         for participant in self.setup_participants:
+            args = ()
             with self.db_query as db:
-                if participant.environment_needs_upgrade(db):
+                if arity(participant.environment_needs_upgrade) == 1:
+                    args = (db,)
+                if participant.environment_needs_upgrade(*args):
                     upgraders.append(participant)
         if not upgraders:
             return
@@ -730,8 +746,11 @@ class Environment(Component, ComponentManager):
         for participant in upgraders:
             self.log.info("%s.%s upgrading...", participant.__module__,
                           participant.__class__.__name__)
+            args = ()
             with self.db_transaction as db:
-                participant.upgrade_environment(db)
+                if arity(participant.upgrade_environment) == 1:
+                    args = (db,)
+                participant.upgrade_environment(*args)
             # Database schema may have changed, so close all connections
             DatabaseManager(self).shutdown()
         return True
@@ -771,7 +790,7 @@ class EnvironmentSetup(Component):
                    vals)
         self._update_sample_config()
 
-    def environment_needs_upgrade(self, db):
+    def environment_needs_upgrade(self):
         dbver = self.env.get_version()
         if dbver == db_default.db_version:
             return False
@@ -781,26 +800,30 @@ class EnvironmentSetup(Component):
                       dbver, db_default.db_version)
         return True
 
-    def upgrade_environment(self, db):
+    def upgrade_environment(self):
         """Each db version should have its own upgrade module, named
         upgrades/dbN.py, where 'N' is the version number (int).
         """
-        cursor = db.cursor()
         dbver = self.env.get_version()
-        for i in range(dbver + 1, db_default.db_version + 1):
-            name  = 'db%i' % i
-            try:
-                upgrades = __import__('upgrades', globals(), locals(), [name])
-                script = getattr(upgrades, name)
-            except AttributeError:
-                raise TracError(_("No upgrade module for version %(num)i "
-                                  "(%(version)s.py)", num=i, version=name))
-            script.do_upgrade(self.env, i, cursor)
-            cursor.execute("""
-                UPDATE system SET value=%s WHERE name='database_version'
-                """, (i,))
-            self.log.info("Upgraded database version from %d to %d", i - 1, i)
-            db.commit()
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            for i in range(dbver + 1, db_default.db_version + 1):
+                name  = 'db%i' % i
+                try:
+                    upgrades = __import__('upgrades', globals(), locals(),
+                                          [name])
+                    script = getattr(upgrades, name)
+                except AttributeError:
+                    raise TracError(_("No upgrade module for version %(num)i "
+                                      "(%(version)s.py)", num=i,
+                                      version=name))
+                script.do_upgrade(self.env, i, cursor)
+                cursor.execute("""
+                    UPDATE system SET value=%s WHERE name='database_version'
+                    """, (i,))
+                self.log.info("Upgraded database version from %d to %d",
+                              i - 1, i)
+                db.commit()
         self._update_sample_config()
 
     # Internal methods

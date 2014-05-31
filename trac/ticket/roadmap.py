@@ -293,26 +293,21 @@ class DefaultTicketGroupStatsProvider(Component):
 def get_ticket_stats(provider, tickets):
     return provider.get_ticket_group_stats([t['id'] for t in tickets])
 
-def get_tickets_for_milestone(env, db=None, milestone=None, field='component'):
+def get_tickets_for_milestone(env, milestone=None, field='component'):
     """Retrieve all tickets associated with the given `milestone`.
-
-    .. versionchanged :: 1.0
-       the `db` parameter is no longer needed and will be removed in
-       version 1.1.1
     """
-    with env.db_query as db:
-        fields = TicketSystem(env).get_ticket_fields()
-        if field in [f['name'] for f in fields if not f.get('custom')]:
-            sql = """SELECT id, status, %s FROM ticket WHERE milestone=%%s
-                     ORDER BY %s""" % (field, field)
-            args = (milestone,)
-        else:
-            sql = """SELECT id, status, value FROM ticket
-                       LEFT OUTER JOIN ticket_custom ON (id=ticket AND name=%s)
-                      WHERE milestone=%s ORDER BY value"""
-            args = (field, milestone)
-        return [{'id': tkt_id, 'status': status, field: fieldval}
-                for tkt_id, status, fieldval in env.db_query(sql, args)]
+    fields = TicketSystem(env).get_ticket_fields()
+    if field in [f['name'] for f in fields if not f.get('custom')]:
+        sql = """SELECT id, status, %s FROM ticket WHERE milestone=%%s
+                 ORDER BY %s""" % (field, field)
+        args = (milestone,)
+    else:
+        sql = """SELECT id, status, value FROM ticket
+                   LEFT OUTER JOIN ticket_custom ON (id=ticket AND name=%s)
+                  WHERE milestone=%s ORDER BY value"""
+        args = (field, milestone)
+    return [{'id': tkt_id, 'status': status, field: fieldval}
+            for tkt_id, status, fieldval in env.db_query(sql, args)]
 
 def apply_ticket_permissions(env, req, tickets):
     """Apply permissions to a set of milestone tickets as returned by

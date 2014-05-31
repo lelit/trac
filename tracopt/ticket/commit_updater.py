@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2009 Edgewall Software
+# Copyright (C) 2009-2014 Edgewall Software
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -76,6 +76,13 @@ class CommitTicketUpdater(Component):
     command ticket:1 and ticket:2
     }}}
 
+    Using the long-form syntax allows a comment to be included in the
+    reference, e.g.:
+    {{{
+    command ticket:1#comment:1
+    command ticket:1#comment:description
+    }}}
+
     In addition, the ':' character can be omitted and issue or bug can be used
     instead of ticket.
 
@@ -134,15 +141,16 @@ class CommitTicketUpdater(Component):
         """Status of the ticket set by the close command.""")
 
     ticket_prefix = '(?:#|(?:ticket|issue|bug)[: ]?)'
-    ticket_reference = ticket_prefix + '[0-9]+(?:#comment:[0-9]+)?'
+    ticket_reference = ticket_prefix + \
+                       '[0-9]+(?:#comment:([0-9]+|description))?'
     ticket_command = (r'(?P<action>[A-Za-z]*)\s*.?\s*'
                       r'(?P<ticket>%s(?:(?:[, &]*|[ ]?and[ ]?)%s)*)' %
                       (ticket_reference, ticket_reference))
 
     @property
     def command_re(self):
-        (begin, end) = (re.escape(self.envelope[0:1]),
-                        re.escape(self.envelope[1:2]))
+        begin, end = (re.escape(self.envelope[0:1]),
+                      re.escape(self.envelope[1:2]))
         return re.compile(begin + self.ticket_command + end)
 
     ticket_re = re.compile(ticket_prefix + '([0-9]+)')
@@ -156,8 +164,7 @@ class CommitTicketUpdater(Component):
             return
         tickets = self._parse_message(changeset.message)
         comment = self.make_ticket_comment(repos, changeset)
-        self._update_tickets(tickets, changeset, comment,
-                             datetime.now(utc))
+        self._update_tickets(tickets, changeset, comment, datetime.now(utc))
 
     def changeset_modified(self, repos, changeset, old_changeset):
         if self._is_duplicate(changeset):
@@ -169,8 +176,7 @@ class CommitTicketUpdater(Component):
         tickets = dict(each for each in tickets.iteritems()
                        if each[0] not in old_tickets)
         comment = self.make_ticket_comment(repos, changeset)
-        self._update_tickets(tickets, changeset, comment,
-                             datetime.now(utc))
+        self._update_tickets(tickets, changeset, comment, datetime.now(utc))
 
     def _is_duplicate(self, changeset):
         # Avoid duplicate changes with multiple scoped repositories
@@ -254,6 +260,8 @@ In [changeset:"%s"]:
         return functions
 
     def _authname(self, changeset):
+        """Returns the author of the changeset, normalizing the casing if
+        [trac] ignore_author_case is true."""
         return changeset.author.lower() \
                if self.env.config.getbool('trac', 'ignore_auth_case') \
                else changeset.author

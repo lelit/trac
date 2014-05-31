@@ -51,6 +51,7 @@ import os.path
 import re
 import weakref
 import posixpath
+from urllib import quote
 
 from trac.config import ListOption, ChoiceOption
 from trac.core import *
@@ -259,6 +260,8 @@ class SubversionConnector(Component):
 
     implements(ISystemInfoProvider, IRepositoryConnector)
 
+    required = False
+
     branches = ListOption('svn', 'branches', 'trunk, branches/*', doc=
         """Comma separated list of paths categorized as branches.
         If a path ends with '*', then all the directory entries found below
@@ -307,7 +310,7 @@ class SubversionConnector(Component):
     # ISystemInfoProvider methods
 
     def get_system_info(self):
-        if self._version is not None:
+        if self.required:
             yield 'Subversion', self._version
 
     # IRepositoryConnector methods
@@ -331,6 +334,7 @@ class SubversionConnector(Component):
         repos = SubversionRepository(dir, params, self.log)
         if type != 'direct-svnfs':
             repos = SvnCachedRepository(self.env, repos, self.log)
+        self.required = True
         return repos
 
 
@@ -383,7 +387,8 @@ class SubversionRepository(Repository):
         assert self.scope[0] == '/'
         # we keep root_path_utf8 for  RA
         ra_prefix = 'file:///' if os.name == 'nt' else 'file://'
-        self.ra_url_utf8 = _svn_uri_canonicalize(ra_prefix + root_path_utf8)
+        self.ra_url_utf8 = _svn_uri_canonicalize(ra_prefix +
+                                                 quote(root_path_utf8))
         self.clear()
 
     def clear(self, youngest_rev=None):
@@ -831,7 +836,7 @@ class SubversionNode(Node):
                 rev = _svn_rev(self.rev)
                 start = _svn_rev(0)
                 file_url_utf8 = posixpath.join(self.repos.ra_url_utf8,
-                                               self._scoped_path_utf8)
+                                               quote(self._scoped_path_utf8))
                 # svn_client_blame2() requires a canonical uri since
                 # Subversion 1.7 (#11167)
                 file_url_utf8 = _svn_uri_canonicalize(file_url_utf8)
