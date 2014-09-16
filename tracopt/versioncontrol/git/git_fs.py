@@ -18,6 +18,7 @@ import os
 import sys
 
 from genshi.builder import tag
+from genshi.core import Markup
 
 from trac.cache import cached
 from trac.config import BoolOption, IntOption, PathOption, Option
@@ -30,7 +31,8 @@ from trac.util.translation import _
 from trac.versioncontrol.api import Changeset, Node, Repository, \
                                     IRepositoryConnector, NoSuchChangeset, \
                                     NoSuchNode, IRepositoryProvider
-from trac.versioncontrol.cache import CachedRepository, CachedChangeset
+from trac.versioncontrol.cache import CACHE_YOUNGEST_REV, CachedRepository, \
+                                      CachedChangeset
 from trac.versioncontrol.web_ui import IPropertyRenderer
 from trac.web.chrome import Chrome
 from trac.wiki import IWikiSyntaxProvider
@@ -39,10 +41,7 @@ from tracopt.versioncontrol.git import PyGIT
 
 
 class GitCachedRepository(CachedRepository):
-    """Git-specific cached repository.
-
-    Passes through {display,short,normalize}_rev
-    """
+    """Git-specific cached repository."""
 
     def display_rev(self, rev):
         return self.short_rev(rev)
@@ -62,6 +61,9 @@ class GitCachedRepository(CachedRepository):
         # return None if repository is empty
         return CachedRepository.get_youngest_rev(self) or None
 
+    def child_revs(self, rev):
+        return self.repos.child_revs(rev)
+
     def get_changesets(self, start, stop):
         for key, csets in itertools.groupby(
                 CachedRepository.get_changesets(self, start, stop),
@@ -80,6 +82,78 @@ class GitCachedRepository(CachedRepository):
 
     def get_changeset(self, rev):
         return GitCachedChangeset(self, self.normalize_rev(rev), self.env)
+
+    def sync(self, feedback=None, clean=False):
+        if clean:
+            self.remove_cache()
+
+        metadata = self.metadata
+        self.save_metadata(metadata)
+        meta_youngest = metadata.get(CACHE_YOUNGEST_REV)
+        repos = self.repos
+
+        def is_synced(rev):
+            for count, in self.env.db_query("""
+                    SELECT COUNT(*) FROM revision WHERE repos=%s AND rev=%s
+                    """, (self.id, rev)):
+                return count > 0
+            return False
+
+        def traverse(rev, seen, revs=None):
+            if revs is None:
+                revs = []
+            while True:
+                if rev in seen:
+                    return revs
+                seen.add(rev)
+                if is_synced(rev):
+                    return revs
+                revs.append(rev)
+                parent_revs = repos.parent_revs(rev)
+                if not parent_revs:
+                    return revs
+                if len(parent_revs) == 1:
+                    rev = parent_revs[0]
+                    continue
+                idx = len(revs)
+                traverse(parent_revs.pop(), seen, revs)
+                for parent in parent_revs:
+                    revs[idx:idx] = traverse(parent, seen)
+
+        while True:
+            repos.sync()
+            repos_youngest = repos.youngest_rev
+            updated = False
+            seen = set()
+
+            for rev in repos.git.all_revs():
+                if repos.child_revs(rev):
+                    continue
+                revs = traverse(rev, seen)  # topology ordered
+                while revs:
+                    # sync revision from older revision to newer revision
+                    rev = revs.pop()
+                    self.log.info("Trying to sync revision [%s]", rev)
+                    cset = repos.get_changeset(rev)
+                    try:
+                        self.insert_changeset(rev, cset)
+                        updated = True
+                    except self.env.db_exc.IntegrityError, e:
+                        self.log.info('Revision %s already cached: %r', rev, e)
+                        continue
+                    if feedback:
+                        feedback(rev)
+
+            if updated:
+                continue  # sync again
+
+            if meta_youngest != repos_youngest:
+                with self.env.db_transaction as db:
+                    db("""
+                        UPDATE repository SET value=%s WHERE id=%s AND name=%s
+                        """, (repos_youngest, self.id, CACHE_YOUNGEST_REV))
+                    del self.metadata
+            return
 
 
 class GitCachedChangeset(CachedChangeset):
@@ -350,9 +424,9 @@ class CsetPropertyRenderer(Component):
                 parent_links = intersperse(', ', \
                     ((sha_link(rev),
                       ' (',
-                      tag.a('diff',
-                            title="Diff against this parent (show the " \
-                                  "changes merged from the other parents)",
+                      tag.a(_("diff"),
+                            title=_("Diff against this parent (show the "
+                                    "changes merged from the other parents)"),
                             href=context.href.changeset(current_sha, reponame,
                                                         old=rev)),
                       ')')
@@ -360,15 +434,17 @@ class CsetPropertyRenderer(Component):
 
                 return tag(list(parent_links),
                            tag.br(),
-                           tag.span(tag("Note: this is a ",
-                                        tag.strong("merge"), " changeset, "
-                                        "the changes displayed below "
-                                        "correspond to the merge itself."),
+                           tag.span(Markup(_("Note: this is a <strong>merge"
+                                             "</strong> changeset, the "
+                                             "changes displayed below "
+                                             "correspond to the merge "
+                                             "itself.")),
                                     class_='hint'),
                            tag.br(),
-                           tag.span(tag("Use the ", tag.code("(diff)"),
-                                        " links above to see all the changes "
-                                        "relative to each parent."),
+                           tag.span(Markup(_("Use the <code>(diff)</code> "
+                                             "links above to see all the "
+                                             "changes relative to each "
+                                             "parent.")),
                                     class_='hint'))
 
             # simple non-merge commit
@@ -408,38 +484,40 @@ class GitRepository(Repository):
         self.use_committer_id = use_committer_id
 
         try:
-            self.git = PyGIT.StorageFactory(path, log, not persistent_cache,
-                                            git_bin=git_bin,
-                                            git_fs_encoding=git_fs_encoding) \
-                            .getInstance()
+            factory = PyGIT.StorageFactory(path, log, not persistent_cache,
+                                           git_bin=git_bin,
+                                           git_fs_encoding=git_fs_encoding)
+            self._git = factory.getInstance()
         except PyGIT.GitError as e:
             log.error(exception_to_unicode(e))
             raise TracError("%s does not appear to be a Git "
                             "repository." % path)
 
-        Repository.__init__(self, 'git:'+path, self.params, log)
-        self._rev_cache_id = str(self.id)
+        Repository.__init__(self, 'git:' + path, self.params, log)
+        self._cached_git_id = str(self.id)
 
     def close(self):
-        self.git = None
+        self._git = None
 
-    @cached('_rev_cache_id')
-    def _rev_cache(self):
-        self.git.invalidate_rev_cache()
-
-    def _check_rev_cache(self):
+    @property
+    def git(self):
         if self.persistent_cache:
-            self._rev_cache
+            return self._cached_git
+        else:
+            return self._git
+
+    @cached('_cached_git_id')
+    def _cached_git(self):
+        self._git.invalidate_rev_cache()
+        return self._git
 
     def get_youngest_rev(self):
-        self._check_rev_cache()
         return self.git.youngest_rev()
 
     def get_path_history(self, path, rev=None, limit=None):
         raise TracError(_("Unsupported \"Show only adds and deletes\""))
 
     def get_oldest_rev(self):
-        self._check_rev_cache()
         return self.git.oldest_rev()
 
     def normalize_path(self, path):
@@ -464,7 +542,6 @@ class GitRepository(Repository):
         return GitNode(self, path, rev, self.log, None, historian)
 
     def get_quickjump_entries(self, rev):
-        self._check_rev_cache()
         for bname, bsha in self.git.get_branches():
             yield 'branches', bname, '/', bsha
         for t in self.git.get_tags():
@@ -545,7 +622,7 @@ class GitRepository(Repository):
             revs = set(self.git.all_revs())
 
         if self.persistent_cache:
-            del self._rev_cache  # invalidate persistent cache
+            del self._cached_git  # invalidate persistent cache
         if not self.git.sync():
             return None # nothing expected to change
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2003-2011 Edgewall Software
+# Copyright (C) 2003-2014 Edgewall Software
 # Copyright (C) 2003-2007 Jonas Borgström <jonas@edgewall.com>
 # All rights reserved.
 #
@@ -180,7 +180,7 @@ class Environment(Component, ComponentManager):
         resources in notification e-mails.""")
 
     base_url_for_redirect = BoolOption('trac', 'use_base_url_for_redirect',
-            False,
+                                        False,
         """Optionally use `[trac] base_url` for redirects.
 
         In some configurations, usually involving running Trac behind
@@ -281,6 +281,8 @@ class Environment(Component, ComponentManager):
         ComponentManager.__init__(self)
 
         self.path = path
+        self.log = None
+        self.config = None
         # System info should be provided through ISystemInfoProvider rather
         # than appending to systeminfo, which may be a private in a future
         # release.
@@ -425,32 +427,6 @@ class Environment(Component, ComponentManager):
             raise TracError("No Trac environment found at %s\n%s"
                             % (self.path, e))
 
-    def get_db_cnx(self):
-        """Return a database connection from the connection pool
-
-        :deprecated: Use :meth:`db_transaction` or :meth:`db_query` instead
-
-        `db_transaction` for obtaining the `db` database connection
-        which can be used for performing any query
-        (SELECT/INSERT/UPDATE/DELETE)::
-
-           with env.db_transaction as db:
-               ...
-
-        Note that within the block, you don't need to (and shouldn't)
-        call ``commit()`` yourself, the context manager will take care
-        of it (if it's the outermost such context manager on the
-        stack).
-
-
-        `db_query` for obtaining a `db` database connection which can
-        be used for performing SELECT queries only::
-
-           with env.db_query as db:
-               ...
-        """
-        return DatabaseManager(self).get_connection()
-
     @lazy
     def db_exc(self):
         """Return an object (typically a module) containing all the
@@ -469,13 +445,21 @@ class Environment(Component, ComponentManager):
         return DatabaseManager(self).get_exceptions()
 
     def with_transaction(self, db=None):
-        """Decorator for transaction functions :deprecated:"""
+        """Decorator for transaction functions.
+
+        :deprecated: Use the query and transaction context managers instead.
+                     Will be removed in Trac 1.3.1.
+        """
         return with_transaction(self, db)
 
     def get_read_db(self):
-        """Return a database connection for read purposes :deprecated:
+        """Return a database connection for read purposes.
 
-        See `trac.db.api.get_read_db` for detailed documentation."""
+        See `trac.db.api.get_read_db` for detailed documentation.
+
+        :deprecated: Use :meth:`db_query` instead.
+                     Will be removed in Trac 1.3.1.
+        """
         return DatabaseManager(self).get_connection(readonly=True)
 
     @property
@@ -617,6 +601,25 @@ class Environment(Component, ComponentManager):
         # Create the database
         DatabaseManager(self).init_db()
 
+    @lazy
+    def database_version(self):
+        """Returns the current version of the database.
+
+        :since 1.0.2:
+        """
+        return self.get_version()
+
+    @lazy
+    def database_initial_version(self):
+        """Returns the version of the database at the time of creation.
+
+        In practice, for database created before 0.11, this will
+        return `False` which is "older" than any db version number.
+
+        :since 1.0.2:
+        """
+        return self.get_version(initial=True)
+
     def get_version(self, initial=False):
         """Return the current version of the database.  If the
         optional argument `initial` is set to `True`, the version of
@@ -626,6 +629,11 @@ class Environment(Component, ComponentManager):
         return `False` which is "older" than any db version number.
 
         :since: 0.11
+
+        :since 1.0.2: The lazily-evaluated attributes `database_version` and
+                      `database_initial_version` should be used instead. This
+                      method will be renamed to a private method in
+                      release 1.3.1.
         """
         rows = self.db_query("""
                 SELECT value FROM system WHERE name='%sdatabase_version'
@@ -634,7 +642,8 @@ class Environment(Component, ComponentManager):
 
     def setup_config(self):
         """Load the configuration file."""
-        self.config = Configuration(os.path.join(self.path, 'conf', 'trac.ini'),
+        self.config = Configuration(os.path.join(self.path, 'conf',
+                                                 'trac.ini'),
                                     {'envname': os.path.basename(self.path)})
         self.setup_log()
         from trac.loader import load_components
@@ -673,19 +682,13 @@ class Environment(Component, ComponentManager):
         self.log.info('-' * 32 + ' environment startup [Trac %s] ' + '-' * 32,
                       get_pkginfo(core).get('version', VERSION))
 
-    def get_known_users(self, cnx=None):
+    def get_known_users(self):
         """Generator that yields information about all known users,
         i.e. users that have logged in to this Trac environment and
         possibly set their name and email.
 
         This function generates one tuple for every user, of the form
         (username, name, email) ordered alpha-numerically by username.
-
-        :param cnx: the database connection; if ommitted, a new
-                    connection is retrieved
-
-        :since 1.0: deprecation warning: the `cnx` parameter is no
-                    longer used and will be removed in version 1.1.1
         """
         for username, name, email in self.db_query("""
                 SELECT DISTINCT s.sid, n.value, e.value
@@ -753,6 +756,7 @@ class Environment(Component, ComponentManager):
                 participant.upgrade_environment(*args)
             # Database schema may have changed, so close all connections
             DatabaseManager(self).shutdown()
+        del self.database_version
         return True
 
     @lazy
@@ -786,12 +790,12 @@ class EnvironmentSetup(Component):
         with self.env.db_transaction as db:
             for table, cols, vals in db_default.get_data(db):
                 db.executemany("INSERT INTO %s (%s) VALUES (%s)"
-                   % (table, ','.join(cols), ','.join(['%s' for c in cols])),
-                   vals)
+                               % (table, ','.join(cols),
+                                  ','.join(['%s'] * len(cols))), vals)
         self._update_sample_config()
 
     def environment_needs_upgrade(self):
-        dbver = self.env.get_version()
+        dbver = self.env.database_version
         if dbver == db_default.db_version:
             return False
         elif dbver > db_default.db_version:
@@ -804,11 +808,11 @@ class EnvironmentSetup(Component):
         """Each db version should have its own upgrade module, named
         upgrades/dbN.py, where 'N' is the version number (int).
         """
-        dbver = self.env.get_version()
+        dbver = self.env.database_version
         with self.env.db_transaction as db:
             cursor = db.cursor()
             for i in range(dbver + 1, db_default.db_version + 1):
-                name  = 'db%i' % i
+                name = 'db%i' % i
                 try:
                     upgrades = __import__('upgrades', globals(), locals(),
                                           [name])
@@ -848,12 +852,13 @@ class EnvironmentSetup(Component):
 env_cache = {}
 env_cache_lock = threading.Lock()
 
+
 def open_environment(env_path=None, use_cache=False):
     """Open an existing environment object, and verify that the database is up
     to date.
 
     :param env_path: absolute path to the environment directory; if
-                     ommitted, the value of the `TRAC_ENV` environment
+                     omitted, the value of the `TRAC_ENV` environment
                      variable is used
     :param use_cache: whether the environment should be cached for
                       subsequent invocations of this function
@@ -879,7 +884,8 @@ def open_environment(env_path=None, use_cache=False):
                 del env_cache[env_path]
                 env = None
             if env is None:
-                env = env_cache.setdefault(env_path, open_environment(env_path))
+                env = env_cache.setdefault(env_path,
+                                           open_environment(env_path))
             else:
                 CacheManager(env).reset_metadata()
     else:
@@ -887,7 +893,7 @@ def open_environment(env_path=None, use_cache=False):
         needs_upgrade = False
         try:
             needs_upgrade = env.needs_upgrade()
-        except Exception as e: # e.g. no database connection
+        except Exception as e:  # e.g. no database connection
             env.log.error("Exception caught while checking for upgrade: %s",
                           exception_to_unicode(e, traceback=True))
         if needs_upgrade:
@@ -980,7 +986,8 @@ class EnvironmentAdmin(Component):
             skip = []
 
             if prefix == 'sqlite':
-                db_path = os.path.join(self.env.path, os.path.normpath(db_path))
+                db_path = os.path.join(self.env.path,
+                                       os.path.normpath(db_path))
                 # don't copy the journal (also, this would fail on Windows)
                 skip = [db_path + '-journal', db_path + '-stmtjrnl']
                 if no_db:
@@ -998,7 +1005,6 @@ class EnvironmentAdmin(Component):
                         printerr('  %s' % err)
                     else:
                         printerr("  %s: '%s'" % (err, path_to_unicode(src)))
-
 
             # db backup for non-sqlite
             if prefix != 'sqlite' and not no_db:
@@ -1024,7 +1030,7 @@ class EnvironmentAdmin(Component):
             printerr(_("The pre-upgrade backup failed.\nUse '--no-backup' to "
                        "upgrade without doing a backup.\n"))
             raise e.args[0]
-        except Exception as e:
+        except Exception:
             printerr(_("The upgrade failed. Please fix the issue and try "
                        "again.\n"))
             raise

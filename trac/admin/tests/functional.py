@@ -86,7 +86,7 @@ class TestDefaultHandler(FunctionalTwillTestCaseSetup):
 
         # Confirm default value.
         self._tester.go_to_admin("Basic Settings")
-        tc.find(r'<option value="WikiModule" selected="selected">'
+        tc.find(r'<option selected="selected" value="WikiModule">'
                 r'WikiModule</option>')
         tc.go(self._tester.url)
         tc.find("Welcome to Trac")
@@ -96,7 +96,7 @@ class TestDefaultHandler(FunctionalTwillTestCaseSetup):
         tc.formvalue('modbasic', 'default_handler', 'TimelineModule')
         tc.submit()
         tc.find("Your changes have been saved.")
-        tc.find(r'<option value="TimelineModule" selected="selected">'
+        tc.find(r'<option selected="selected" value="TimelineModule">'
                 r'TimelineModule</option>')
         tc.go(self._tester.url)
         tc.find(r'<h1>Timeline</h1>')
@@ -124,6 +124,12 @@ class TestDefaultHandler(FunctionalTwillTestCaseSetup):
             self._testenv.set_config('trac', 'default_handler',
                                      'BatchModifyModule')
             self._tester.go_to_admin("Basic Settings")
+            tc.find(r'<option value="BatchModifyModule">BatchModifyModule'
+                    r'</option>')
+            tc.find(r'<span class="hint">BatchModifyModule is not a valid '
+                    r'IRequestHandler or is not enabled.</span>')
+            tc.formvalue('modbasic', 'default_handler', 'BatchModifyModule')
+            tc.submit()  # Invalid value should not be replaced on submit
             tc.find(r'<option value="BatchModifyModule">BatchModifyModule'
                     r'</option>')
             tc.find(r'<span class="hint">BatchModifyModule is not a valid '

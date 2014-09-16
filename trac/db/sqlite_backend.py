@@ -20,13 +20,15 @@ import weakref
 
 from trac.config import ListOption
 from trac.core import *
-from trac.db.api import Connection, IDatabaseConnector
+from trac.db.api import ConnectionBase, IDatabaseConnector
 from trac.db.util import ConnectionWrapper, IterableCursor
 from trac.env import ISystemInfoProvider
 from trac.util import get_pkginfo, getuser
 from trac.util.translation import _
 
 _like_escape_re = re.compile(r'([/_%])')
+
+_glob_escape_re = re.compile(r'[*?\[]')
 
 try:
     import pysqlite2.dbapi2 as sqlite
@@ -256,7 +258,7 @@ class SQLiteConnector(Component):
         return dest_file
 
 
-class SQLiteConnection(Connection, ConnectionWrapper):
+class SQLiteConnection(ConnectionBase, ConnectionWrapper):
     """Connection wrapper for SQLite."""
 
     __slots__ = ['_active_cursors', '_eager']
@@ -352,6 +354,12 @@ class SQLiteConnection(Connection, ConnectionWrapper):
             return _like_escape_re.sub(r'/\1', text)
         else:
             return text
+
+    def prefix_match(self):
+        return 'GLOB %s'
+
+    def prefix_match_value(self, prefix):
+        return _glob_escape_re.sub(lambda m: '[%s]' % m.group(0), prefix) + '*'
 
     def quote(self, identifier):
         return "`%s`" % identifier.replace('`', '``')

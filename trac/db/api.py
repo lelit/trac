@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C)2005-2009 Edgewall Software
+# Copyright (C)2005-2014 Edgewall Software
 # Copyright (C) 2005 Christopher Lenz <cmlenz@gmx.de>
 # All rights reserved.
 #
@@ -21,13 +21,12 @@ from abc import ABCMeta, abstractmethod
 
 from trac.config import BoolOption, IntOption, Option
 from trac.core import *
+from trac.db.pool import ConnectionPool
 from trac.db.schema import Table
+from trac.db.util import ConnectionWrapper
 from trac.util.concurrency import ThreadLocal
 from trac.util.text import unicode_passwd
 from trac.util.translation import _
-
-from .pool import ConnectionPool
-from .util import ConnectionWrapper
 
 
 def with_transaction(env, db=None):
@@ -61,9 +60,9 @@ def with_transaction(env, db=None):
 
     :deprecated: This decorator is in turn deprecated in favor of
                  context managers now that python 2.4 support has been
-                 dropped. Use instead the new context manager,
-                 `QueryContextManager` and
-                 `TransactionContextManager`, which makes for much
+                 dropped. It will be removed in Trac 1.3.1. Use instead
+                 the new context managers, `QueryContextManager` and
+                 `TransactionContextManager`, which make for much
                  simpler to write code:
 
     >>> def api_method(p1, p2):
@@ -182,7 +181,7 @@ class QueryContextManager(DbContextManager):
                 self.db.close()
 
 
-class Connection(object):
+class ConnectionBase(object):
     """Abstract base class for database connection classes."""
 
     __metaclass__ = ABCMeta
@@ -227,6 +226,16 @@ class Connection(object):
     @abstractmethod
     def like_escape(self, text):
         """Returns `text` escaped for use in a `LIKE` clause."""
+        pass
+
+    @abstractmethod
+    def prefix_match(self):
+        """Return a case sensitive prefix-matching operator."""
+        pass
+
+    @abstractmethod
+    def prefix_match_value(self, prefix):
+        """Return a value for case sensitive prefix-matching operator."""
         pass
 
     @abstractmethod
@@ -372,7 +381,7 @@ class DatabaseManager(Component):
                 backup_dir = os.path.join(self.env.path, backup_dir)
             db_str = self.config.get('trac', 'database')
             db_name, db_path = db_str.split(":", 1)
-            dest_name = '%s.%i.%d.bak' % (db_name, self.env.get_version(),
+            dest_name = '%s.%i.%d.bak' % (db_name, self.env.database_version,
                                           int(time.time()))
             dest = os.path.join(backup_dir, dest_name)
         else:

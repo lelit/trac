@@ -21,7 +21,7 @@ from genshi.builder import Element, Fragment, tag
 from trac.config import ConfigSection
 from trac.core import *
 from trac.util.html import find_element
-from trac.util.translation import _, N_
+from trac.util.translation import N_, _, tag_
 from trac.web.api import IRequestHandler
 from trac.wiki.api import IWikiMacroProvider
 from trac.wiki.formatter import extract_link
@@ -54,7 +54,7 @@ class InterTracDispatcher(Component):
            it doesn't know how to dispatch an InterTrac link, and it's up to
            the local Trac to prepare the correct link. Not all links will work
            that way, but the most common do. This is called the compatibility
-           mode, and is `true` by default.
+           mode, and is `false` by default.
          * If you know that the remote Trac knows how to dispatch InterTrac
            links, you can explicitly disable this compatibility mode and then
            ''any'' TracLinks can become InterTrac links.
@@ -126,7 +126,8 @@ class InterTracDispatcher(Component):
             intertrac = intertracs[prefix]
             if isinstance(intertrac, basestring):
                 yield tag.tr(tag.td(tag.strong(prefix)),
-                             tag.td('Alias for ', tag.strong(intertrac)))
+                             tag.td(tag_("Alias for %(name)s",
+                                         name=tag.strong(intertrac))))
             else:
                 url = intertrac.get('url', '')
                 if url:
@@ -136,5 +137,6 @@ class InterTracDispatcher(Component):
                                  tag.td(tag.a(title, href=url)))
 
         return tag.table(class_="wiki intertrac")(
-            tag.tr(tag.th(tag.em('Prefix')), tag.th(tag.em('Trac Site'))),
+            tag.tr(tag.th(tag.em(_("Prefix"))),
+                   tag.th(tag.em(_("Trac Site")))),
             [generate_prefix(p) for p in sorted(intertracs.keys())])

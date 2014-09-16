@@ -85,9 +85,14 @@ class TitleIndexMacro(WikiMacroBase):
 
     Accepts a prefix string as parameter: if provided, only pages with names
     that start with the prefix are included in the resulting list. If this
-    parameter is omitted, all pages are listed.
-    If the prefix is specified, a second argument of value `hideprefix`
-    can be given as well, in order to remove that prefix from the output.
+    parameter is omitted, all pages are listed. If the prefix is specified,
+    a second argument of value `hideprefix` can be given as well, in order
+    to remove that prefix from the output.
+
+    The prefix string supports the standard relative-path notation ''when
+    using the macro in a wiki page''. A prefix string starting with `./`
+    will be relative to the current page, and parent pages can be
+    specified using `../`.
 
     Alternate `format` and `depth` named parameters can be specified:
      - `format=compact`: The pages are displayed as comma-separated links.
@@ -331,8 +336,9 @@ class RecentChangesMacro(WikiMacroBase):
                         max(time) AS max_time FROM wiki"""
         args = []
         if prefix:
-            sql += " WHERE name LIKE %s"
-            args.append(prefix + '%')
+            with self.env.db_query as db:
+                sql += " WHERE name %s" % db.prefix_match()
+                args.append(db.prefix_match_value(prefix))
         sql += " GROUP BY name ORDER BY max_time DESC"
         if limit:
             sql += " LIMIT %s"
@@ -359,8 +365,9 @@ class RecentChangesMacro(WikiMacroBase):
 
         items_per_date = (
             (date, (tag.li(tag.a(page, href=formatter.href.wiki(name)),
-                           tag.small(' (', tag.a('diff', href=diff_href), ')')
-                           if diff_href else None, '\n')
+                           tag.small(' (', tag.a(_("diff"), href=diff_href),
+                                     ')') if diff_href else None,
+                           '\n')
                     for page, name, version, diff_href in entries))
             for date, entries in entries_per_date)
 

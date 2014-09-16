@@ -18,6 +18,11 @@
   <xi:include href="admin.html" />
   <head>
     <title>Components</title>
+    <script type="text/javascript">
+      jQuery(document).ready(function($) {
+        $("#complist").addSelectAllCheckboxes();
+      });
+    </script>
   </head>
 
   <body>
@@ -40,32 +45,25 @@
     </py:def>
 
     <py:choose test="view">
-      <form py:when="'detail'" class="mod" id="modcomp" method="post" action="">
+      <form py:when="'detail'" id="edit" class="mod" method="post" action="">
         <fieldset>
           <legend>Modify Component:</legend>
           <div class="field">
             <label>Name:<br /><input type="text" name="name" class="trac-autofocus" value="$component.name" /></label>
           </div>
           ${owner_field(component.owner, True)}
-          <div class="field">
-            <fieldset>
-              <label for="description" i18n:msg="">
-                Description (you may use
-                <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a>
-                here):
-              </label>
-              <p>
-                <textarea id="description" name="description" class="wikitext trac-resizable"
-                          rows="6" cols="60">
-$component.description</textarea>
-              </p>
-            </fieldset>
-          </div>
-          <div class="buttons">
-            <input type="submit" name="save" class="trac-disable-on-submit" value="${_('Save')}"/>
-            <input type="submit" name="cancel" value="${_('Cancel')}" />
+          <div class="field description">
+            <label for="description" i18n:msg="">
+              Description: (you may use <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here)
+            </label>
+            <textarea id="description" name="description" class="wikitext trac-fullwidth trac-resizable"
+                      rows="8" cols="78">$component.description</textarea>
           </div>
         </fieldset>
+        <div class="buttons">
+          <input type="submit" name="save" class="trac-disable-on-submit" value="${_('Submit changes')}"/>
+          <input type="submit" name="cancel" value="${_('Cancel')}" />
+        </div>
       </form>
 
       <py:otherwise>
@@ -86,7 +84,7 @@ $component.description</textarea>
           <form py:when="components" id="component_table" method="post" action="">
             <table class="listing" id="complist">
               <thead>
-                <tr><th class="sel">&nbsp;</th>
+                <tr><th class="sel"></th>
                   <th>Name</th><th>Owner</th><th>Default</th>
                 </tr>
               </thead>

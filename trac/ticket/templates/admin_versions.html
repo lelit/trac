@@ -18,13 +18,18 @@
   <xi:include href="admin.html" />
   <head>
     <title>Versions</title>
+    <script type="text/javascript">
+      jQuery(document).ready(function($) {
+        $("#verlist").addSelectAllCheckboxes();
+      });
+    </script>
   </head>
 
   <body>
     <h2>Manage Versions <span py:if="view == 'list'" class="trac-count">(${len(versions)})</span></h2>
 
     <py:choose test="view">
-      <form py:when="'detail'" class="mod" id="modifyversion" method="post" action="">
+      <form py:when="'detail'" id="edit" class="mod" method="post" action="">
         <fieldset>
           <legend>Modify Version:</legend>
           <div class="field">
@@ -41,22 +46,18 @@
               <span class="hint" i18n:msg="datehint">Format: $datetime_hint</span>
             </label>
           </div>
-          <div class="field">
-            <fieldset>
-              <label for="description" i18n:msg="">
-                Description (you may use <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here):
-              </label>
-              <p>
-                <textarea id="description" name="description" class="wikitext trac-resizable" rows="6" cols="60">
-$version.description</textarea>
-              </p>
-            </fieldset>
-          </div>
-          <div class="buttons">
-            <input type="submit" name="save" class="trac-disable-on-submit" value="${_('Save')}"/>
-            <input type="submit" name="cancel" value="${_('Cancel')}"/>
+          <div class="field description">
+            <label for="description" i18n:msg="">
+              Description: (you may use <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here)
+            </label>
+            <textarea id="description" name="description" class="wikitext trac-fullwidth trac-resizable"
+                      rows="8" cols="78">$version.description</textarea>
           </div>
         </fieldset>
+        <div class="buttons">
+          <input type="submit" name="save" class="trac-disable-on-submit" value="${_('Submit changes')}"/>
+          <input type="submit" name="cancel" value="${_('Cancel')}"/>
+        </div>
       </form>
 
       <py:otherwise>
@@ -86,7 +87,7 @@ $version.description</textarea>
           <form py:when="versions" id="version_table" method="post" action="">
             <table class="listing" id="verlist">
               <thead>
-                <tr><th class="sel">&nbsp;</th>
+                <tr><th class="sel"></th>
                   <th>Name</th><th>Released</th><th>Default</th>
                 </tr>
               </thead>

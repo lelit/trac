@@ -121,13 +121,15 @@ class ReportModule(Component):
         """Number of tickets displayed in the rss feeds for reports.
         (''since 0.11'')""")
 
+    REPORT_LIST_ID = -1  # Resource id of the report list page
+
     # INavigationContributor methods
 
     def get_active_navigation_item(self, req):
         return 'tickets'
 
     def get_navigation_items(self, req):
-        if 'REPORT_VIEW' in req.perm:
+        if 'REPORT_VIEW' in req.perm('report', self.REPORT_LIST_ID):
             yield ('mainnav', 'tickets', tag.a(_('View Tickets'),
                                                href=req.href.report()))
 
@@ -141,7 +143,8 @@ class ReportModule(Component):
     # IRequestHandler methods
 
     def match_request(self, req):
-        match = re.match(r'/report(?:/(?:([0-9]+)|-1))?$', req.path_info)
+        match = re.match(r'/report(?:/(?:([0-9]+)|%s))?$'
+                         % self.REPORT_LIST_ID, req.path_info)
         if match:
             if match.group(1):
                 req.args['id'] = match.group(1)
@@ -149,11 +152,8 @@ class ReportModule(Component):
 
     def process_request(self, req):
         # did the user ask for any special report?
-        id = int(req.args.get('id', -1))
-        if id != -1:
-            req.perm('report', id).require('REPORT_VIEW')
-        else:
-            req.perm.require('REPORT_VIEW')
+        id = int(req.args.get('id', self.REPORT_LIST_ID))
+        req.perm('report', id).require('REPORT_VIEW')
 
         data = {}
         action = req.args.get('action', 'view')
@@ -171,7 +171,7 @@ class ReportModule(Component):
         elif action == 'delete':
             template = 'report_delete.html'
             data = self._render_confirm_delete(req, id)
-        elif id == -1:
+        elif id == self.REPORT_LIST_ID:
             template, data, content_type = self._render_list(req)
             if content_type: # i.e. alternate format
                 return template, data, content_type
@@ -186,10 +186,11 @@ class ReportModule(Component):
                 return template, data, content_type
 
         from trac.ticket.query import QueryModule
-        show_query_link = 'TICKET_VIEW' in req.perm and \
+        show_query_link = 'TICKET_VIEW' in req.perm('ticket') and \
                           self.env.is_component_enabled(QueryModule)
 
-        if id != -1 or action == 'new':
+        if  (id != self.REPORT_LIST_ID or action == 'new') and \
+                'REPORT_VIEW' in req.perm('report', self.REPORT_LIST_ID):
             add_ctxtnav(req, _('Available Reports'), href=req.href.report())
             add_link(req, 'up', req.href.report(), _('Available Reports'))
         elif show_query_link:
@@ -210,7 +211,7 @@ class ReportModule(Component):
     # Internal methods
 
     def _do_create(self, req):
-        req.perm.require('REPORT_CREATE')
+        req.perm('report').require('REPORT_CREATE')
 
         if 'cancel' in req.args:
             req.redirect(req.href.report())
@@ -262,11 +263,11 @@ class ReportModule(Component):
                 'report': {'id': id, 'title': title}}
 
     def _render_editor(self, req, id, copy):
-        if id != -1:
+        if id != self.REPORT_LIST_ID:
             req.perm('report', id).require('REPORT_MODIFY')
             title, description, query = self.get_report(id)
         else:
-            req.perm.require('REPORT_CREATE')
+            req.perm('report').require('REPORT_CREATE')
             title = description = query = ''
 
         # an explicitly given 'query' parameter will override the saved query
@@ -275,14 +276,11 @@ class ReportModule(Component):
         if copy:
             title += ' (copy)'
 
-        if copy or id == -1:
-            data = {'title': _('Create New Report'),
-                    'action': 'new',
+        if copy or id == self.REPORT_LIST_ID:
+            data = {'action': 'new',
                     'error': None}
         else:
-            data = {'title': _('Edit Report {%(num)d} %(title)s', num=id,
-                               title=title),
-                    'action': 'edit',
+            data = {'action': 'edit',
                     'error': req.args.get('error')}
 
         data['report'] = {'id': id, 'title': title,
@@ -420,10 +418,7 @@ class ReportModule(Component):
                 'report_href': report_href,
                 }
 
-        res = None
-        with self.env.db_query as db:
-            res = self.execute_paginated_report(req, db, id, sql, args, limit,
-                                                offset)
+        res = self.execute_paginated_report(req, id, sql, args, limit, offset)
 
         if len(res) == 2:
             e, sql = res
@@ -597,7 +592,6 @@ class ReportModule(Component):
                      'numrows': numrows})
 
         if format == 'rss':
-            data['email_map'] = chrome.get_email_map()
             data['context'] = web_context(req, report_resource,
                                           absurls=True)
             return 'report.rss', data, 'application/rss+xml'
@@ -649,21 +643,42 @@ class ReportModule(Component):
                     args=", ".join(missing_args)))
             return 'report_view.html', data, None
 
-    def execute_paginated_report(self, req, db, id, sql, args,
-                                 limit=0, offset=0):
+    def execute_paginated_report(self, req, *largs, **kwargs):
+        """
+        :param req: `Request` object.
+        :param db: Database connection object (optional and deprecated).
+        :param id: Integer id of the report.
+        :param sql: SQL query that generates the report.
+        :param args: SQL query arguments.
+        :param limit: Maximum number of results to return (optional).
+        :param offset: Offset to start of results (optional).
+
+        :deprecated: since 1.1.2, the `db` positional argument is deprecated
+                     and will be removed in 1.3.1.
+        """
+        from trac.db.util import ConnectionWrapper
+        if isinstance(largs[0], ConnectionWrapper):
+            return self._execute_paginated_report(req, *largs, **kwargs)
+        with self.env.db_query as db:
+            return self._execute_paginated_report(req, db, *largs, **kwargs)
+
+    def _execute_paginated_report(self, req, db, id, sql, args,
+                                  limit=0, offset=0):
+        """Deprecated and will be removed in Trac 1.3.1. Call
+        `execute_paginated_report` instead."""
         sql, args, missing_args = self.sql_sub_vars(sql, args)
         if not sql:
             raise TracError(_("Report {%(num)s} has no SQL query.", num=id))
         self.log.debug('Report {%d} with SQL "%s"', id, sql)
         self.log.debug('Request args: %r', req.args)
 
-        cursor = db.cursor()
-
         num_items = 0
         order_by = []
         limit_offset = None
         base_sql = sql.replace(SORT_COLUMN, '1').replace(LIMIT_OFFSET, '')
-        if id == -1 or limit == 0:
+
+        cursor = db.cursor()
+        if id == self.REPORT_LIST_ID or limit == 0:
             sql = base_sql
         else:
             # The number of tickets is obtained

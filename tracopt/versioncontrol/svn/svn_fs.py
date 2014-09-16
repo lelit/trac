@@ -502,7 +502,7 @@ class SubversionRepository(Repository):
         specifications. No revision given means use the latest.
         """
         path = path or ''
-        if path and path[-1] == '/':
+        if path and path != '/' and path[-1] == '/':
             path = path[:-1]
         rev = self.normalize_rev(rev) or self.youngest_rev
         return SubversionNode(path, rev, self, self.pool)
@@ -519,6 +519,18 @@ class SubversionRepository(Repository):
                 break
             revs.append(r)
         return revs
+
+    def _get_changed_revs(self, node_infos):
+        path_revs = {}
+        for node, first in node_infos:
+            path = node.path
+            revs = []
+            for p, r, chg in node.get_history():
+                if p != path or r < first:
+                    break
+                revs.append(r)
+            path_revs[path] = revs
+        return path_revs
 
     def _history(self, path, start, end, pool):
         """`path` is a unicode path in the scope.

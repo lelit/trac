@@ -17,12 +17,14 @@
 import os.path
 import time
 from abc import ABCMeta, abstractmethod
+from datetime import datetime
 
 from trac.admin import AdminCommandError, IAdminCommandProvider, get_dir_list
 from trac.config import ConfigSection, ListOption, Option
 from trac.core import *
 from trac.resource import IResourceManager, Resource, ResourceNotFound
 from trac.util.concurrency import threading
+from trac.util.datefmt import utc
 from trac.util.text import printout, to_unicode, exception_to_unicode
 from trac.util.translation import _
 from trac.web.api import IRequestFilter
@@ -946,15 +948,20 @@ class Repository(object):
         """
         pass
 
-    @abstractmethod
+    # @abstractmethod
     def get_path_history(self, path, rev=None, limit=None):
         """Retrieve all the revisions containing this path.
 
         If given, `rev` is used as a starting point (i.e. no revision
         ''newer'' than `rev` should be returned).
         The result format should be the same as the one of Node.get_history()
+
+        :since 1.1.2: The method should be implemented in subclasses since
+                      it will be made abstract in Trac 1.3.1. A `TypeError`
+                      will result when instantiating classes that don't
+                      implement the method.
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def normalize_path(self, path):
@@ -1230,6 +1237,20 @@ class Changeset(object):
         return 'CHANGESET_VIEW' in perm(self.resource)
 
     can_view = is_viewable  # 0.12 compatibility
+
+
+class EmptyChangeset(Changeset):
+    """Changeset that contains no changes. This is typically used when the
+    changeset can't be retrieved."""
+
+    def __init__(self, repos, rev, message=None, author=None, date=None):
+        if date is None:
+            date = datetime(1970, 1, 1, tzinfo=utc)
+        super(EmptyChangeset, self).__init__(repos, rev, message, author,
+                                             date)
+
+    def get_changes(self):
+        return iter([])
 
 
 # Note: Since Trac 0.12, Exception PermissionDenied class is gone,

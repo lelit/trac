@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2003-2009 Edgewall Software
+# Copyright (C) 2003-2014 Edgewall Software
 # Copyright (C) 2003-2006 Jonas Borgström <jonas@edgewall.com>
 # Copyright (C) 2005 Christopher Lenz <cmlenz@gmx.de>
 # Copyright (C) 2006 Christian Boos <cboos@edgewall.org>
@@ -20,16 +20,16 @@
 import re
 from datetime import datetime
 
-from trac.attachment import Attachment
 from trac import core
+from trac.attachment import Attachment
 from trac.cache import cached
 from trac.core import TracError
 from trac.resource import Resource, ResourceNotFound
 from trac.ticket.api import TicketSystem
 from trac.util import embedded_numbers, partition
-from trac.util.text import empty
 from trac.util.datefmt import from_utimestamp, parse_date, to_utimestamp, \
                               utc, utcmax
+from trac.util.text import empty
 from trac.util.translation import _
 
 __all__ = ['Ticket', 'Type', 'Status', 'Resolution', 'Priority', 'Severity',
@@ -81,7 +81,7 @@ class Ticket(object):
     def id_is_valid(num):
         return 0 < int(num) <= 1L << 31
 
-    # 0.11 compatibility
+    # 0.11 compatibility. Will be removed in 1.3.1.
     time_created = property(lambda self: self.values.get('time'))
     time_changed = property(lambda self: self.values.get('changetime'))
 
@@ -181,9 +181,9 @@ class Ticket(object):
         """
         if name in self.values and self.values[name] == value:
             return
-        if name not in self._old: # Changed field
+        if name not in self._old:  # Changed field
             self._old[name] = self.values.get(name)
-        elif self._old[name] == value: # Change of field reverted
+        elif self._old[name] == value:  # Change of field reverted
             del self._old[name]
         if value and name not in self.time_fields:
             if isinstance(value, list):
@@ -236,7 +236,7 @@ class Ticket(object):
             if self.values.get('component'):
                 try:
                     component = Component(self.env, self['component'])
-                    default_to_owner = component.owner # even if it's empty
+                    default_to_owner = component.owner  # even if it's empty
                 except ResourceNotFound:
                     # No such component exists
                     pass
@@ -300,7 +300,7 @@ class Ticket(object):
         props_unchanged = all(self.values.get(k) == v
                               for k, v in self._old.iteritems())
         if (not comment or not comment.strip()) and props_unchanged:
-            return False # Not modified
+            return False  # Not modified
 
         if when is None:
             when = datetime.now(utc)
@@ -538,6 +538,12 @@ class Ticket(object):
 
         self._fetch_ticket(self.id)
 
+        changes = dict((field, (oldvalue, newvalue))
+                       for field, oldvalue, newvalue in fields)
+        for listener in TicketSystem(self.env).change_listeners:
+            if hasattr(listener, 'ticket_change_deleted'):
+                listener.ticket_change_deleted(self, cdate, changes)
+
     def modify_comment(self, cdate, author, comment, when=None):
         """Modify a ticket comment specified by its date, while keeping a
         history of edits.
@@ -562,8 +568,8 @@ class Ticket(object):
             # Find the next edit number
             fields = db("""SELECT field FROM ticket_change
                            WHERE ticket=%%s AND time=%%s AND field %s
-                           """ % db.like(),
-                           (self.id, ts, db.like_escape('_comment') + '%'))
+                           """ % db.prefix_match(),
+                           (self.id, ts, db.prefix_match_value('_comment')))
             rev = max(int(field[8:]) for field, in fields) + 1 if fields else 0
             db("""INSERT INTO ticket_change
                     (ticket,time,author,field,oldvalue,newvalue)
@@ -573,12 +579,11 @@ class Ticket(object):
             if old_comment is False:
                 # There was no comment field, add one, find the
                 # original author in one of the other changed fields
-                old_author = None
                 for old_author, in db("""
                         SELECT author FROM ticket_change
                         WHERE ticket=%%s AND time=%%s AND NOT field %s LIMIT 1
-                        """ % db.like(),
-                        (self.id, ts, db.like_escape('_') + '%')):
+                        """ % db.prefix_match(),
+                        (self.id, ts, db.prefix_match_value('_'))):
                     db("""INSERT INTO ticket_change
                             (ticket,time,author,field,oldvalue,newvalue)
                           VALUES (%s,%s,%s,'comment','',%s)
@@ -593,6 +598,12 @@ class Ticket(object):
                (when_ts, self.id))
 
         self.values['changetime'] = when
+
+        old_comment = old_comment or ''
+        for listener in TicketSystem(self.env).change_listeners:
+            if hasattr(listener, 'ticket_comment_modified'):
+                listener.ticket_comment_modified(self, cdate, author, comment,
+                                                 old_comment)
 
     def get_comment_history(self, cnum=None, cdate=None):
         """Retrieve the edit history of a comment identified by its number or
@@ -618,8 +629,8 @@ class Ticket(object):
                 for author0, last_comment in db("""
                         SELECT author, newvalue FROM ticket_change
                         WHERE ticket=%%s AND time=%%s AND NOT field %s LIMIT 1
-                        """ % db.like(),
-                        (self.id, ts0, db.like_escape('_') + '%')):
+                        """ % db.prefix_match(),
+                        (self.id, ts0, db.prefix_match_value('_'))):
                     break
                 else:
                     return
@@ -628,8 +639,8 @@ class Ticket(object):
             rows = db("""SELECT field, author, oldvalue, newvalue
                          FROM ticket_change
                          WHERE ticket=%%s AND time=%%s AND field %s
-                         """ % db.like(),
-                         (self.id, ts0, db.like_escape('_comment') + '%'))
+                         """ % db.prefix_match(),
+                         (self.id, ts0, db.prefix_match_value('_comment')))
             rows = sorted((int(field[8:]), author, old, new)
                           for field, author, old, new in rows)
             history = []
@@ -681,10 +692,10 @@ class Ticket(object):
                 for author, in db("""
                         SELECT author FROM ticket_change
                         WHERE ticket=%%s AND time=%%s AND NOT field %s LIMIT 1
-                        """ % db.like(),
-                        (self.id, ts, db.like_escape('_') + '%')):
+                        """ % db.prefix_match(),
+                        (self.id, ts, db.prefix_match_value('_'))):
                     break
-            return (ts, author, comment)
+            return ts, author, comment
 
 
 def simplify_whitespace(name):
@@ -735,7 +746,7 @@ class AbstractEnum(object):
                         enum.value = unicode(int(enum.value) - 1)
                         enum.update()
                 except ValueError:
-                    pass # Ignore cast error for this non-essential operation
+                    pass  # Ignore cast error for this non-essential operation
             TicketSystem(self.env).reset_ticket_fields()
         self.value = self._old_value = None
         self.name = self._old_name = None
@@ -975,7 +986,7 @@ class Milestone(object):
             if not self.cache.fetchone(name, self):
                 raise ResourceNotFound(
                     _("Milestone %(name)s does not exist.",
-                      name=name), _("Invalid milestone name"))
+                      name=name), _("Invalid milestone name."))
         else:
             self.cache.factory((None, None, None, ''), self)
 
@@ -985,7 +996,7 @@ class Milestone(object):
 
     @property
     def resource(self):
-        return Resource(self.realm, self.name) ### .version !!!
+        return Resource(self.realm, self.name)  ### .version !!!
 
     exists = property(lambda self: self._old['name'] is not None)
     is_completed = property(lambda self: self.completed is not None)
@@ -999,20 +1010,18 @@ class Milestone(object):
         if invalidate:
             del self.cache.milestones
 
-    _to_old = checkin #: compatibility with hacks < 0.12.5 (remove in 1.1.1)
-
     def delete(self, retarget_to=None, author=None):
         """Delete the milestone.
 
-        :param author: the author of the change
-
-        :since 1.0.2: the `retarget_to` parameter is deprecated and tickets
-        should moved to another milestone by calling `move_tickets` before
-        `delete`.
+        :since 1.0.2: the `retarget_to` and `author` parameters are
+                      deprecated and will be removed in Trac 1.3.1. Tickets
+                      should be moved to another milestone by calling
+                      `move_tickets` before `delete`.
         """
         with self.env.db_transaction as db:
             self.env.log.info("Deleting milestone %s", self.name)
             db("DELETE FROM milestone WHERE name=%s", (self.name,))
+            Attachment.delete_all(self.env, self.realm, self.name)
             # Don't translate ticket comment (comment:40:ticket:5658)
             self.move_tickets(retarget_to, author, "Milestone deleted")
             self._old['name'] = None
@@ -1092,7 +1101,7 @@ class Milestone(object):
             if not self.cache.fetchone(new_milestone):
                 raise ResourceNotFound(
                     _("Milestone %(name)s does not exist.",
-                      name=new_milestone), _("Invalid milestone name"))
+                      name=new_milestone), _("Invalid milestone name."))
         now = datetime.now(utc)
         with self.env.db_transaction as db:
             sql = "SELECT id FROM ticket WHERE milestone=%s"
@@ -1108,6 +1117,13 @@ class Milestone(object):
                     ticket['milestone'] = new_milestone
                     ticket.save_changes(author, comment, now)
         return tkt_ids
+
+    def get_num_tickets(self):
+        """Returns the number of tickets associated with the milestone.
+        """
+        return self.env.db_query("""
+            SELECT COUNT(*) FROM ticket WHERE milestone=%s
+            """, (self.name,))[0][0]
 
     @classmethod
     def select(cls, env, include_completed=True):
@@ -1128,7 +1144,7 @@ def group_milestones(milestones, include_completed):
         return 1 if m.is_completed else 2 if m.due else 3
     open_due_milestones, open_not_due_milestones, \
         closed_milestones = partition([(m, category(m))
-            for m in milestones], (2, 3, 1))
+                                       for m in milestones], (2, 3, 1))
     groups = [
         (_('Open (by due date)'), open_due_milestones),
         (_('Open (no due date)'), open_not_due_milestones),
@@ -1214,5 +1230,5 @@ class Version(object):
             version.description = description or ''
             versions.append(version)
         def version_order(v):
-            return (v.time or utcmax, embedded_numbers(v.name))
+            return v.time or utcmax, embedded_numbers(v.name)
         return sorted(versions, key=version_order, reverse=True)

@@ -23,7 +23,7 @@ from genshi.core import Markup
 
 from trac.core import *
 from trac.config import Option
-from trac.db.api import Connection, DatabaseManager, IDatabaseConnector, \
+from trac.db.api import ConnectionBase, DatabaseManager, IDatabaseConnector, \
                         _parse_db_str, get_column_names
 from trac.db.util import ConnectionWrapper, IterableCursor
 from trac.env import IEnvironmentSetupParticipant, ISystemInfoProvider
@@ -344,7 +344,7 @@ class MySQLConnector(Component):
                 supported=repr(self.SUPPORTED_COLLATIONS)))
 
 
-class MySQLConnection(Connection, ConnectionWrapper):
+class MySQLConnection(ConnectionBase, ConnectionWrapper):
     """Connection wrapper for MySQL."""
 
     poolable = True
@@ -441,6 +441,12 @@ class MySQLConnection(Connection, ConnectionWrapper):
 
     def like_escape(self, text):
         return _like_escape_re.sub(r'/\1', text)
+
+    def prefix_match(self):
+        return "LIKE %s ESCAPE '/'"
+
+    def prefix_match_value(self, prefix):
+        return self.like_escape(prefix) + '%'
 
     def quote(self, identifier):
         return "`%s`" % identifier.replace('`', '``')

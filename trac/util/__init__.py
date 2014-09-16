@@ -18,6 +18,7 @@
 #         Matthew Good <trac@matt-good.net>
 
 import errno
+import functools
 import inspect
 from itertools import izip, tee
 import locale
@@ -32,9 +33,10 @@ import tempfile
 import time
 from urllib import quote, unquote, urlencode
 
-from .compat import any, md5, sha1, sorted
-from .datefmt import to_datetime, to_timestamp, utc
-from .text import exception_to_unicode, to_unicode, getpreferredencoding
+from trac.util.compat import any, md5, sha1, sorted
+from trac.util.datefmt import to_datetime, to_timestamp, utc
+from trac.util.text import exception_to_unicode, to_unicode, \
+                           getpreferredencoding
 
 # -- req, session and web utils
 
@@ -710,11 +712,33 @@ def get_pkginfo(dist):
     """
     import types
     if isinstance(dist, types.ModuleType):
+        def has_resource(dist, resource_name):
+            if dist.location.endswith('.egg'):  # installed by easy_install
+                return dist.has_resource(resource_name)
+            if dist.has_metadata('installed-files.txt'):  # installed by pip
+                resource_name = os.path.normpath('../' + resource_name)
+                return any(resource_name == os.path.normpath(name)
+                           for name
+                           in dist.get_metadata_lines('installed-files.txt'))
+            if dist.has_metadata('SOURCES.txt'):
+                resource_name = os.path.normpath(resource_name)
+                return any(resource_name == os.path.normpath(name)
+                           for name in dist.get_metadata_lines('SOURCES.txt'))
+            toplevel = resource_name.split('/')[0]
+            if dist.has_metadata('top_level.txt'):
+                return toplevel in dist.get_metadata_lines('top_level.txt')
+            return dist.key == toplevel.lower()
         module = dist
         module_path = get_module_path(module)
+        resource_name = module.__name__.replace('.', '/')
+        if os.path.basename(module.__file__) in ('__init__.py', '__init__.pyc',
+                                                 '__init__.pyo'):
+            resource_name += '/__init__.py'
+        else:
+            resource_name += '.py'
         for dist in find_distributions(module_path, only=True):
             if os.path.isfile(module_path) or \
-                   dist.key == module.__name__.lower():
+                    has_resource(dist, resource_name):
                 break
         else:
             return {}
@@ -737,6 +761,20 @@ def get_pkginfo(dist):
         for attr in attrs:
             info[normalize(attr)] = err
     return info
+
+
+def warn_setuptools_issue(out=None):
+    if not out:
+        out = sys.stderr
+    import setuptools
+    from pkg_resources import parse_version as parse
+    if parse('5.4') <= parse(setuptools.__version__) < parse('5.7') and \
+            not os.environ.get('PKG_RESOURCES_CACHE_ZIP_MANIFESTS'):
+        out.write("Warning: Detected setuptools version %s. The environment "
+                  "variable 'PKG_RESOURCES_CACHE_ZIP_MANIFESTS' must be set "
+                  "to avoid significant performance degradation.\n"
+                  % setuptools.__version__)
+
 
 # -- crypto utils
 
@@ -1082,17 +1120,29 @@ def to_ranges(revs):
 
 
 class lazy(object):
-    """A lazily-evaluated attribute"""
+    """A lazily-evaluated attribute.
+
+    :since: 1.0
+    """
 
     def __init__(self, fn):
         self.fn = fn
+        functools.update_wrapper(self, fn)
 
     def __get__(self, instance, owner):
         if instance is None:
             return self
+        if self.fn.__name__ in instance.__dict__:
+            return instance.__dict__[self.fn.__name__]
         result = self.fn(instance)
-        setattr(instance, self.fn.__name__, result)
+        instance.__dict__[self.fn.__name__] = result
         return result
+
+    def __set__(self, instance, value):
+        instance.__dict__[self.fn.__name__] = value
+
+    def __delete__(self, instance):
+        del instance.__dict__[self.fn.__name__]
 
 
 # -- algorithmic utilities

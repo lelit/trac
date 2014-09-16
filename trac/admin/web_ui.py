@@ -20,11 +20,6 @@ import pkg_resources
 import re
 import shutil
 
-try:
-    from babel.core import Locale
-except ImportError:
-    Locale = None
-
 from genshi import HTML
 from genshi.builder import tag
 
@@ -35,7 +30,7 @@ from trac.perm import PermissionSystem, IPermissionRequestor
 from trac.util.datefmt import all_timezones, pytz
 from trac.util.text import exception_to_unicode, \
                            unicode_to_base64, unicode_from_base64
-from trac.util.translation import _, get_available_locales, ngettext
+from trac.util.translation import _, Locale, get_available_locales, ngettext
 from trac.web import HTTPNotFound, IRequestHandler
 from trac.web.chrome import add_notice, add_stylesheet, \
                             add_warning, Chrome, INavigationContributor, \
@@ -211,9 +206,9 @@ class BasicsAdminPanel(Component):
             yield ('general', _("General"), 'basics', _("Basic Settings"))
 
     def render_admin_panel(self, req, cat, page, path_info):
-        valid_handlers = [handler.__class__.__name__
-                          for handler in self.request_handlers
-                          if is_valid_default_handler(handler)]
+        valid_default_handlers = [handler.__class__.__name__
+                                  for handler in self.request_handlers
+                                  if is_valid_default_handler(handler)]
         if Locale:
             locale_ids = get_available_locales()
             locales = [Locale.parse(locale) for locale in locale_ids]
@@ -229,8 +224,6 @@ class BasicsAdminPanel(Component):
                 self.config.set('project', option, req.args.get(option))
 
             default_handler = req.args.get('default_handler')
-            if default_handler not in valid_handlers:
-                default_handler = ''
             self.config.set('trac', 'default_handler', default_handler)
 
             default_timezone = req.args.get('default_timezone')
@@ -258,7 +251,7 @@ class BasicsAdminPanel(Component):
 
         data = {
             'default_handler': default_handler,
-            'handlers': sorted(valid_handlers),
+            'valid_default_handlers': sorted(valid_default_handlers),
             'default_timezone': default_timezone,
             'timezones': all_timezones,
             'has_pytz': pytz is not None,

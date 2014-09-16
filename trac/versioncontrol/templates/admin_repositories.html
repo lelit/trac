@@ -18,6 +18,11 @@
   <xi:include href="admin.html"/>
   <head>
     <title>Repositories</title>
+    <script type="text/javascript">
+      jQuery(document).ready(function($) {
+        $("#trac-reposlist").addSelectAllCheckboxes();
+      });
+    </script>
   </head>
 
   <body py:with="sorted_repos = sorted(repositories.iteritems(), key=lambda item: item[0].lower())">
@@ -48,7 +53,8 @@
     </py:def>
 
     <py:choose test="view">
-      <form py:when="'detail'" py:with="info = repositories[reponame]" class="mod" id="trac-modrepos" method="post" action="">
+      <form py:when="'detail'" py:with="info = repositories[reponame]"
+            id="edit" class="mod" method="post" action="">
         <fieldset py:choose="" py:with="disabled = 'disabled' if not info.editable else None;
                                         readonly = 'readonly' if not info.editable else None">
           <legend py:when="info.editable">Modify Repository:</legend>
@@ -81,23 +87,18 @@
               Hide from repository index
             </label>
           </div>
-          <div class="field">
-            <fieldset>
-              <label for="description" i18n:msg="">
-                Description (you may use <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here):
-              </label>
-              <p>
-                <textarea id="description" name="description" class="wikitext trac-resizable"
-                          rows="6" cols="60" readonly="$readonly">
-$info.description</textarea>
-              </p>
-            </fieldset>
-          </div>
-          <div class="buttons">
-            <input py:if="info.editable" type="submit" name="save" class="trac-disable-on-submit" value="${_('Save')}"/>
-            <input type="submit" name="cancel" value="${_('Cancel')}"/>
+          <div class="field description">
+            <label for="description" i18n:msg="">
+              Description: (you may use <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here)
+            </label>
+            <textarea id="description" name="description" class="wikitext trac-fullwidth trac-resizable"
+                      rows="8" cols="78" readonly="$readonly">$info.description</textarea>
           </div>
         </fieldset>
+        <div class="buttons">
+          <input py:if="info.editable" type="submit" name="save" class="trac-disable-on-submit" value="${_('Submit changes')}" />
+          <input type="submit" name="cancel" value="${_('Cancel')}" />
+        </div>
       </form>
 
       <py:otherwise>
@@ -134,7 +135,7 @@ $info.description</textarea>
         <form py:if="sorted_repos" id="trac-repository_table" method="post" action="">
           <table class="listing" id="trac-reposlist">
             <thead>
-              <tr><th class="sel">&nbsp;</th>
+              <tr><th class="sel"></th>
                 <th>Name</th><th>Type</th><th>Directory</th><th>Revision</th>
               </tr>
             </thead>

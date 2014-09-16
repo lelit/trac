@@ -694,7 +694,7 @@ class TestAdminComponentDetail(FunctionalTwillTestCaseSetup):
         tc.go(component_url)
         tc.follow(name)
         desc = 'Some component description'
-        tc.formvalue('modcomp', 'description', desc)
+        tc.formvalue('edit', 'description', desc)
         tc.submit('cancel')
         tc.url(component_url + '$')
         tc.follow(name)
@@ -756,46 +756,83 @@ class TestAdminMilestoneDuplicates(FunctionalTwillTestCaseSetup):
         tc.formvalue('addmilestone', 'name', name)
         tc.submit()
         tc.notfind(internal_error)
-        tc.find('Milestone %s already exists' % name)
+        tc.find('Milestone "%s" already exists, please choose '
+                'another name.' % name)
         tc.notfind('%s')
+
+
+class TestAdminMilestoneListing(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Admin milestone listing."""
+        name1 = self._tester.create_milestone()
+        self._tester.create_ticket(info={'milestone': name1})
+        name2 = self._tester.create_milestone()
+
+        milestone_url = self._tester.url + '/admin/ticket/milestones'
+        tc.go(milestone_url)
+        tc.url(milestone_url)
+        tc.find(r'<a href="/admin/ticket/milestones/%(name)s">%(name)s</a>'
+                % {'name': name1})
+        tc.find(r'<a href="/query\?groupby=status&amp;milestone=%(name)s">'
+                r'1</a>' % {'name': name1})
+        tc.find(r'<a href="/admin/ticket/milestones/%(name)s">%(name)s</a>'
+                % {'name': name2})
+        tc.notfind(r'<a href="/query\?groupby=status&amp;milestone=%(name)s">'
+                   r'0</a>' % {'name': name2})
 
 
 class TestAdminMilestoneDetail(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Admin modify milestone details"""
-        name = "DetailMilestone"
-        # Create a milestone
-        self._tester.create_milestone(name)
+        name = self._tester.create_milestone()
+
+        milestone_url = self._tester.url + '/admin/ticket/milestones'
+        def go_to_milestone_detail():
+            tc.go(milestone_url)
+            tc.url(milestone_url)
+            tc.follow(name)
+            tc.url(milestone_url + '/' + name)
 
         # Modify the details of the milestone
-        milestone_url = self._tester.url + "/admin/ticket/milestones"
-        tc.go(milestone_url)
-        tc.url(milestone_url)
-        tc.follow(name)
-        tc.url(milestone_url + '/' + name)
-        tc.formvalue('modifymilestone', 'description', 'Some description.')
+        go_to_milestone_detail()
+        tc.formvalue('edit', 'due', True)
+        tc.formvalue('edit', 'description', 'Some description.')
         tc.submit('save')
         tc.url(milestone_url)
 
-        # Make sure the milestone isn't closed
+        # Milestone is not closed
         self._tester.go_to_roadmap()
         tc.find(name)
 
-        # Cancel more modifications
-        tc.go(milestone_url)
-        tc.url(milestone_url)
-        tc.follow(name)
-        tc.formvalue('modifymilestone', 'description',
-                     '~~Some other description.~~')
+        # Cancel more modifications and modification are not saved
+        go_to_milestone_detail()
+        tc.formvalue('edit', 'description', '~~Some other description.~~')
         tc.submit('cancel')
         tc.url(milestone_url)
-
-        # Verify the correct modifications show up
         self._tester.go_to_roadmap()
         tc.find('Some description.')
         tc.follow(name)
         tc.find('Some description.')
 
+        # Milestone is readonly when user doesn't have MILESTONE_MODIFY
+        self._tester.logout()
+        self._testenv.grant_perm('user', 'TICKET_ADMIN')
+        self._tester.login('user')
+        go_to_milestone_detail()
+        try:
+            tc.find(r'<input[^>]+id="name"[^>]+readonly="readonly"')
+            tc.find(r'<input[^>]+id="due"[^>]+disabled="disabled"')
+            tc.find(r'<input[^>]+id="duedate"[^>]+readonly="readonly"')
+            tc.find(r'<input[^>]+id="completed"[^>]+disabled="disabled"')
+            tc.find(r'<input[^>]+id="completeddate"[^>]+readonly="readonly"')
+            tc.find(r'<textarea[^>]+id="description"[^>]+readonly="readonly"')
+            tc.find(r'<input[^>]+name="save"[^>]+disabled="disabled"')
+            tc.submit('cancel', 'edit')
+            tc.url(milestone_url)
+        finally:
+            self._tester.logout()
+            self._testenv.revoke_perm('user', 'TICKET_ADMIN')
+            self._tester.login('admin')
 
 class TestAdminMilestoneDue(FunctionalTwillTestCaseSetup):
     def runTest(self):
@@ -824,7 +861,8 @@ class TestAdminMilestoneDetailDue(FunctionalTwillTestCaseSetup):
         duedate = datetime.now(tz=utc)
         duedate_string = format_datetime(duedate, tzinfo=utc,
                                          locale=locale_en)
-        tc.formvalue('modifymilestone', 'due', duedate_string)
+        tc.formvalue('edit', 'due', True)
+        tc.formvalue('edit', 'duedate', duedate_string)
         tc.submit('save')
         tc.url(milestone_url + '$')
         tc.find(name + '(<[^>]*>|\\s)*'+ duedate_string, 's')
@@ -841,7 +879,7 @@ class TestAdminMilestoneDetailRename(FunctionalTwillTestCaseSetup):
         self._tester.go_to_url(milestone_url)
         tc.follow(name1)
         tc.url(milestone_url + '/' + name1)
-        tc.formvalue('modifymilestone', 'name', name2)
+        tc.formvalue('edit', 'name', name2)
         tc.submit('save')
 
         tc.find(r"Your changes have been saved\.")
@@ -866,7 +904,7 @@ class TestAdminMilestoneCompleted(FunctionalTwillTestCaseSetup):
         tc.url(milestone_url)
         tc.follow(name)
         tc.url(milestone_url + '/' + name)
-        tc.formvalue('modifymilestone', 'completed', True)
+        tc.formvalue('edit', 'completed', True)
         tc.submit('save')
         tc.url(milestone_url + "$")
 
@@ -881,10 +919,10 @@ class TestAdminMilestoneCompletedFuture(FunctionalTwillTestCaseSetup):
         tc.url(milestone_url)
         tc.follow(name)
         tc.url(milestone_url + '/' + name)
-        tc.formvalue('modifymilestone', 'completed', True)
+        tc.formvalue('edit', 'completed', True)
         cdate = datetime.now(tz=utc) + timedelta(days=2)
         cdate_string = format_date(cdate, tzinfo=localtz, locale=locale_en)
-        tc.formvalue('modifymilestone', 'completeddate', cdate_string)
+        tc.formvalue('edit', 'completeddate', cdate_string)
         tc.submit('save')
         tc.find('Completion date may not be in the future')
         # And make sure it wasn't marked as completed.
@@ -1072,7 +1110,7 @@ class TestAdminPriorityModify(FunctionalTwillTestCaseSetup):
         tc.url(priority_url + '$')
         tc.find(name)
         tc.follow(name)
-        tc.formvalue('modenum', 'name', name * 2)
+        tc.formvalue('edit', 'name', name * 2)
         tc.submit('save')
         tc.url(priority_url + '$')
         tc.find(name * 2)
@@ -1142,14 +1180,14 @@ class TestAdminPriorityDetail(FunctionalTwillTestCaseSetup):
         tc.url(priority_url + '$')
         tc.follow(name + '1')
         tc.url(priority_url + '/' + name + '1')
-        tc.formvalue('modenum', 'name', name + '2')
+        tc.formvalue('edit', 'name', name + '2')
         tc.submit('save')
         tc.url(priority_url + '$')
 
         # Cancel more modifications
         tc.go(priority_url)
         tc.follow(name)
-        tc.formvalue('modenum', 'name', name + '3')
+        tc.formvalue('edit', 'name', name + '3')
         tc.submit('cancel')
         tc.url(priority_url + '$')
 
@@ -1327,7 +1365,7 @@ class TestAdminVersionDetail(FunctionalTwillTestCaseSetup):
         tc.follow(name)
 
         desc = 'Some version description.'
-        tc.formvalue('modifyversion', 'description', desc)
+        tc.formvalue('edit', 'description', desc)
         tc.submit('save')
         tc.url(version_admin)
         tc.follow(name)
@@ -1344,7 +1382,7 @@ class TestAdminVersionDetailTime(FunctionalTwillTestCaseSetup):
         tc.url(version_admin)
         tc.follow(name)
 
-        tc.formvalue('modifyversion', 'time', '')
+        tc.formvalue('edit', 'time', '')
         tc.submit('save')
         tc.url(version_admin + '$')
         tc.find(name + '(<[^>]*>|\\s)*<[^>]* name="default" value="%s"'
@@ -1362,7 +1400,7 @@ class TestAdminVersionDetailCancel(FunctionalTwillTestCaseSetup):
         tc.follow(name)
 
         desc = 'Some other version description.'
-        tc.formvalue('modifyversion', 'description', desc)
+        tc.formvalue('edit', 'description', desc)
         tc.submit('cancel')
         tc.url(version_admin)
         tc.follow(name)
@@ -2136,10 +2174,10 @@ class RegressionTestTicket6912b(FunctionalTwillTestCaseSetup):
                                       owner='admin')
         tc.follow('RegressionTestTicket6912b')
         try:
-            tc.formvalue('modcomp', 'owner', '')
+            tc.formvalue('edit', 'owner', '')
         except twill.utils.ClientForm.ItemNotFoundError as e:
             raise twill.errors.TwillAssertionError(e)
-        tc.submit('save', formname='modcomp')
+        tc.submit('save', formname='edit')
         tc.find('RegressionTestTicket6912b</a>[ \n\t]*</td>[ \n\t]*'
                 '<td class="owner"></td>', 's')
 
@@ -2436,9 +2474,9 @@ class RegressionTestTicket11028(FunctionalTwillTestCaseSetup):
                                      ('ROADMAP_VIEW', 'MILESTONE_VIEW'))
 
 
-class RegressionTestTicket11153(FunctionalTwillTestCaseSetup):
+class RegressionTestTicket11152(FunctionalTwillTestCaseSetup):
     def runTest(self):
-        """Test for regression of http://trac.edgewall.org/ticket/11153"""
+        """Test for regression of http://trac.edgewall.org/ticket/11152"""
         # Check that "View Tickets" mainnav entry links to the report page
         self._tester.go_to_view_tickets()
 
@@ -2491,6 +2529,10 @@ class RegressionTestTicket11176(FunctionalTestCaseSetup):
         Fine-grained permission checks should be enforced on the Report list
         page, the report pages and query pages."""
         self._testenv.enable_authz_permpolicy("""
+            [ticket:*]
+            anonymous = TICKET_VIEW
+            [report:-1]
+            anonymous = REPORT_VIEW
             [report:1]
             anonymous = REPORT_VIEW
             [report:2]
@@ -2613,6 +2655,7 @@ def functionalSuite(suite=None):
     suite.addTest(TestAdminMilestoneAuthorization())
     suite.addTest(TestAdminMilestoneSpace())
     suite.addTest(TestAdminMilestoneDuplicates())
+    suite.addTest(TestAdminMilestoneListing())
     suite.addTest(TestAdminMilestoneDetail())
     suite.addTest(TestAdminMilestoneDue())
     suite.addTest(TestAdminMilestoneDetailDue())
@@ -2695,7 +2738,7 @@ def functionalSuite(suite=None):
     suite.addTest(RegressionTestTicket10010())
     suite.addTest(RegressionTestTicket10772())
     suite.addTest(RegressionTestTicket11028())
-    suite.addTest(RegressionTestTicket11153())
+    suite.addTest(RegressionTestTicket11152())
     suite.addTest(RegressionTestTicket11590())
     suite.addTest(RegressionTestTicket11618())
     if ConfigObj:

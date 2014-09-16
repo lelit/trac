@@ -52,6 +52,36 @@ class TestTicketChangeListener(core.Component):
         self.action = 'deleted'
         self.ticket = ticket
 
+    # the listener has no ticket_comment_modified and ticket_change_deleted
+
+
+class TestTicketChangeListener_2(core.Component):
+    implements(ITicketChangeListener)
+
+    def ticket_created(self, ticket):
+        pass
+
+    def ticket_changed(self, ticket, comment, author, old_values):
+        pass
+
+    def ticket_deleted(self, ticket):
+        pass
+
+    def ticket_comment_modified(self, ticket, cdate, author, comment,
+                                old_comment):
+        self.action = 'comment_modified'
+        self.ticket = ticket
+        self.cdate = cdate
+        self.author = author
+        self.comment = comment
+        self.old_comment = old_comment
+
+    def ticket_change_deleted(self, ticket, cdate, changes):
+        self.action = 'change_deleted'
+        self.ticket = ticket
+        self.cdate = cdate
+        self.changes = changes
+
 
 class TicketTestCase(unittest.TestCase):
 
@@ -632,6 +662,19 @@ class TicketCommentEditTestCase(TicketCommentTestCase):
             self.assertEqual((i, t[i], 'joe (%d)' % i,
                              'Comment 1 (%d)' % i), history[i])
 
+    def test_change_listener_comment_modified(self):
+        listener = TestTicketChangeListener_2(self.env)
+        ticket = Ticket(self.env, self.id)
+        ticket.modify_comment(cdate=self.t2, author='jack',
+                              comment='New Comment 2', when=datetime.now(utc))
+
+        self.assertEqual('comment_modified', listener.action)
+        self.assertEqual(ticket, listener.ticket)
+        self.assertEqual(self.t2, listener.cdate)
+        self.assertEqual('jack', listener.author)
+        self.assertEqual('New Comment 2', listener.comment)
+        self.assertEqual('Comment 2', listener.old_comment)
+
 
 class TicketCommentDeleteTestCase(TicketCommentTestCase):
 
@@ -767,6 +810,25 @@ class TicketCommentDeleteTestCase(TicketCommentTestCase):
         ticket.delete_change(1, when=t)
         self.assertEqual(t, ticket.time_changed)
 
+    def test_ticket_change_deleted(self):
+        listener = TestTicketChangeListener_2(self.env)
+        ticket = Ticket(self.env, self.id)
+
+        ticket.delete_change(cdate=self.t3, when=datetime.now(utc))
+        self.assertEqual('change_deleted', listener.action)
+        self.assertEqual(ticket, listener.ticket)
+        self.assertEqual(self.t3, listener.cdate)
+        self.assertEqual(dict(keywords=('a, b, c', 'a, b'),
+                              foo=('change2', 'change3')),
+                         listener.changes)
+
+        ticket.delete_change(cnum=2, when=datetime.now(utc))
+        self.assertEqual('change_deleted', listener.action)
+        self.assertEqual(ticket, listener.ticket)
+        self.assertEqual(self.t2, listener.cdate)
+        self.assertEqual(dict(owner=('john', 'jack'),
+                              foo=('change 1', 'change2')),
+                         listener.changes)
 
 class EnumTestCase(unittest.TestCase):
 
@@ -994,6 +1056,20 @@ class MilestoneTestCase(unittest.TestCase):
         self.assertEqual('', tkt2['milestone'])
         self.assertEqual(tkt1['changetime'], tkt2['changetime'])
         self.assertNotEqual(self.updated_at, tkt1['changetime'])
+
+    def test_delete_milestone_with_attachment(self):
+        milestone = Milestone(self.env)
+        milestone.name = 'MilestoneWithAttachment'
+        milestone.insert()
+        
+        attachment = Attachment(self.env, 'milestone', milestone.name)
+        attachment.insert('foo.txt', StringIO(), 0, 1)
+
+        milestone.delete()
+        self.assertEqual(False, milestone.exists)
+
+        attachments = Attachment.select(self.env, 'milestone', milestone.name)
+        self.assertRaises(StopIteration, attachments.next)
 
     def test_delete_milestone_retarget_tickets(self):
         self.env.db_transaction.executemany(

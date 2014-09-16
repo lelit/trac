@@ -24,30 +24,62 @@ from trac.tests.compat import rmtree
 from trac.util import create_file
 from trac.util.compat import close_fds
 from trac.util.datefmt import to_timestamp, utc
-from trac.versioncontrol.api import DbRepositoryProvider, NoSuchChangeset, \
-                                    NoSuchNode, RepositoryManager
+from trac.versioncontrol.api import Changeset, DbRepositoryProvider, \
+                                    NoSuchChangeset, NoSuchNode, \
+                                    RepositoryManager
 from trac.versioncontrol.web_ui.browser import BrowserModule
 from trac.versioncontrol.web_ui.log import LogModule
 from trac.web.href import Href
 from tracopt.versioncontrol.git.PyGIT import StorageFactory
-from tracopt.versioncontrol.git.git_fs import GitConnector
+from tracopt.versioncontrol.git.git_fs import GitCachedRepository, \
+                                              GitConnector, GitRepository
 
 
 git_bin = None
 
 
-def git_date_format(dt):
-    offset = dt.utcoffset()
-    secs = offset.days * 3600 * 24 + offset.seconds
-    hours, rem = divmod(abs(secs), 3600)
-    return '%d %c%02d:%02d' % (to_timestamp(dt), '-' if secs < 0 else '+',
-                               hours, rem / 60)
+class GitCommandMixin(object):
+
+    def _git_commit(self, *args, **kwargs):
+        env = kwargs.get('env') or os.environ.copy()
+        if 'date' in kwargs:
+            self._set_committer_date(env, kwargs.pop('date'))
+        args = ('commit',) + args
+        kwargs['env'] = env
+        return self._git(*args, **kwargs)
+
+    def _git(self, *args, **kwargs):
+        args = (git_bin,) + args
+        proc = Popen(args, stdout=PIPE, stderr=PIPE, close_fds=close_fds,
+                     cwd=self.repos_path, **kwargs)
+        stdout, stderr = proc.communicate()
+        self.assertEqual(0, proc.returncode,
+                         'git exits with %r, args %r, stdout %r, stderr %r' %
+                         (proc.returncode, args, stdout, stderr))
+        return proc
+
+    def _git_date_format(self, dt):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=utc)
+        offset = dt.utcoffset()
+        secs = offset.days * 3600 * 24 + offset.seconds
+        hours, rem = divmod(abs(secs), 3600)
+        return '%d %c%02d:%02d' % (to_timestamp(dt), '-' if secs < 0 else '+',
+                                   hours, rem / 60)
+
+    def _set_committer_date(self, env, dt):
+        if not isinstance(dt, basestring):
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=utc)
+            dt = self._git_date_format(dt)
+        env['GIT_COMMITTER_DATE'] = dt
+        env['GIT_AUTHOR_DATE'] = dt
 
 
-class BaseTestCase(unittest.TestCase):
+class BaseTestCase(unittest.TestCase, GitCommandMixin):
 
     def setUp(self):
-        self.env = EnvironmentStub(enable=['trac.*','tracopt.versioncontrol.git.*'])
+        self.env = EnvironmentStub()
         self.repos_path = tempfile.mkdtemp(prefix='trac-gitrepos-')
         if git_bin:
             self.env.config.set('git', 'git_bin', git_bin)
@@ -74,29 +106,16 @@ class BaseTestCase(unittest.TestCase):
 
     def _git_init(self, data=True, bare=False):
         if bare:
-            self._git('init', '--bare', self.repos_path)
+            self._git('init', '--bare')
         else:
-            self._git('init', self.repos_path)
+            self._git('init')
         if not bare and data:
             self._git('config', 'user.name', 'Joe')
             self._git('config', 'user.email', 'joe@example.com')
             create_file(os.path.join(self.repos_path, '.gitignore'))
             self._git('add', '.gitignore')
-            env = os.environ.copy()
-            committer_date = datetime(2001, 1, 29, 16, 39, 56, 0, utc)
-            env['GIT_COMMITTER_DATE'] = git_date_format(committer_date)
-            env['GIT_AUTHOR_DATE'] = git_date_format(committer_date)
-            self._git('commit', '-a', '-m', 'test', env=env)
-
-    def _git(self, *args, **kwargs):
-        args = (git_bin,) + args
-        proc = Popen(args, stdout=PIPE, stderr=PIPE, close_fds=close_fds,
-                     cwd=self.repos_path, **kwargs)
-        stdout, stderr = proc.communicate()
-        self.assertEqual(0, proc.returncode,
-               'git exits with %r, stdout %r, stderr %r' % (proc.returncode,
-                                                            stdout, stderr))
-        return proc
+            self._git_commit('-a', '-m', 'test',
+                             date=datetime(2001, 1, 29, 16, 39, 56))
 
 
 class SanityCheckingTestCase(BaseTestCase):
@@ -165,10 +184,7 @@ class PersistentCacheTestCase(BaseTestCase):
     def _commit(self, date):
         gitignore = os.path.join(self.repos_path, '.gitignore')
         create_file(gitignore, date.isoformat())
-        env = os.environ.copy()
-        env['GIT_COMMITTER_DATE'] = git_date_format(date)
-        env['GIT_AUTHOR_DATE'] = git_date_format(date)
-        self._git('commit', '-a', '-m', date.isoformat(), env=env)
+        self._git_commit('-a', '-m', date.isoformat(), date=date)
 
     @property
     def _repository(self):
@@ -190,12 +206,9 @@ class HistoryTimeRangeTestCase(BaseTestCase):
         filename = os.path.join(self.repos_path, '.gitignore')
         start = datetime(2000, 1, 1, 0, 0, 0, 0, utc)
         ts = datetime(2014, 2, 5, 15, 24, 6, 0, utc)
-        env = os.environ.copy()
-        env['GIT_COMMITTER_DATE'] = git_date_format(ts)
-        env['GIT_AUTHOR_DATE'] = git_date_format(ts)
         for idx in xrange(3):
             create_file(filename, 'commit-%d.txt' % idx)
-            self._git('commit', '-a', '-m', 'commit %d' % idx, env=env)
+            self._git_commit('-a', '-m', 'commit %d' % idx, date=ts)
         self._add_repository()
         repos = self._repomgr.get_repository('gitrepos')
         repos.sync()
@@ -298,6 +311,196 @@ class GitNormalTestCase(BaseTestCase):
         self._test_on_empty_repos('false')
 
 
+class GitRepositoryTestCase(BaseTestCase):
+
+    cached_repository = 'disabled'
+
+    def setUp(self):
+        BaseTestCase.setUp(self)
+        self.env.config.set('git', 'cached_repository', self.cached_repository)
+
+    def _create_merge_commit(self):
+        for idx, branch in enumerate(('alpha', 'beta')):
+            self._git('checkout', '-b', branch, 'master')
+            for n in xrange(2):
+                filename = 'file-%s-%d.txt' % (branch, n)
+                create_file(os.path.join(self.repos_path, filename))
+                self._git('add', filename)
+                self._git_commit('-a', '-m', filename,
+                                 date=datetime(2014, 2, 2, 17, 12,
+                                               n * 2 + idx))
+        self._git('checkout', 'alpha')
+        self._git('merge', '-m', 'Merge branch "beta" to "alpha"', 'beta')
+
+    def test_repository_instance(self):
+        self._git_init()
+        self._add_repository('gitrepos')
+        self.assertEqual(GitRepository,
+                         type(self._repomgr.get_repository('gitrepos')))
+
+    def test_reset_head(self):
+        self._git_init()
+        create_file(os.path.join(self.repos_path, 'file.txt'), 'text')
+        self._git('add', 'file.txt')
+        self._git_commit('-a', '-m', 'test',
+                         date=datetime(2014, 2, 2, 17, 12, 18))
+        self._add_repository('gitrepos')
+        repos = self._repomgr.get_repository('gitrepos')
+        repos.sync()
+        youngest_rev = repos.youngest_rev
+        entries = list(repos.get_node('').get_history())
+        self.assertEqual(2, len(entries))
+        self.assertEqual('', entries[0][0])
+        self.assertEqual(Changeset.EDIT, entries[0][2])
+        self.assertEqual('', entries[1][0])
+        self.assertEqual(Changeset.ADD, entries[1][2])
+
+        self._git('reset', '--hard', 'HEAD~')
+        repos.sync()
+        new_entries = list(repos.get_node('').get_history())
+        self.assertEqual(1, len(new_entries))
+        self.assertEqual(new_entries[0], entries[1])
+        self.assertNotEqual(youngest_rev, repos.youngest_rev)
+
+    def test_tags(self):
+        self._git_init()
+        self._add_repository('gitrepos')
+        repos = self._repomgr.get_repository('gitrepos')
+        repos.sync()
+        self.assertEqual(['master'], self._get_quickjump_names(repos))
+        self._git('tag', 'v1.0', 'master')  # add tag
+        repos.sync()
+        self.assertEqual(['master', 'v1.0'], self._get_quickjump_names(repos))
+        self._git('tag', '-d', 'v1.0')  # delete tag
+        repos.sync()
+        self.assertEqual(['master'], self._get_quickjump_names(repos))
+
+    def test_branchs(self):
+        self._git_init()
+        self._add_repository('gitrepos')
+        repos = self._repomgr.get_repository('gitrepos')
+        repos.sync()
+        self.assertEqual(['master'], self._get_quickjump_names(repos))
+        self._git('branch', 'alpha', 'master')  # add branch
+        repos.sync()
+        self.assertEqual(['alpha', 'master'], self._get_quickjump_names(repos))
+        self._git('branch', '-m', 'alpha', 'beta')  # rename branch
+        repos.sync()
+        self.assertEqual(['beta', 'master'], self._get_quickjump_names(repos))
+        self._git('branch', '-D', 'beta')  # delete branch
+        repos.sync()
+        self.assertEqual(['master'], self._get_quickjump_names(repos))
+
+    def test_parent_child_revs(self):
+        self._git_init()
+        self._git('branch', 'initial')
+        self._create_merge_commit()
+        self._git('branch', 'latest')
+
+        self._add_repository('gitrepos')
+        repos = self._repomgr.get_repository('gitrepos')
+        repos.sync()
+
+        rev = repos.normalize_rev('initial')
+        children = repos.child_revs(rev)
+        self.assertEqual(2, len(children), 'child_revs: %r' % children)
+        parents = repos.parent_revs(rev)
+        self.assertEqual(0, len(parents), 'parent_revs: %r' % parents)
+        self.assertEqual(1, len(repos.child_revs(children[0])))
+        self.assertEqual(1, len(repos.child_revs(children[1])))
+
+        rev = repos.normalize_rev('latest')
+        children = repos.child_revs(rev)
+        self.assertEqual(0, len(children), 'child_revs: %r' % children)
+        parents = repos.parent_revs(rev)
+        self.assertEqual(2, len(parents), 'parent_revs: %r' % parents)
+        self.assertEqual(1, len(repos.parent_revs(parents[0])))
+        self.assertEqual(1, len(repos.parent_revs(parents[1])))
+
+    def _get_quickjump_names(self, repos):
+        return sorted(name for type, name, path, rev
+                           in repos.get_quickjump_entries('HEAD'))
+
+
+class GitCachedRepositoryTestCase(GitRepositoryTestCase):
+
+    cached_repository = 'enabled'
+
+    def test_repository_instance(self):
+        self._git_init()
+        self._add_repository('gitrepos')
+        self.assertEqual(GitCachedRepository,
+                         type(self._repomgr.get_repository('gitrepos')))
+
+    def test_sync(self):
+        self._git_init()
+        for idx in xrange(3):
+            filename = 'file%d.txt' % idx
+            create_file(os.path.join(self.repos_path, filename))
+            self._git('add', filename)
+            self._git_commit('-a', '-m', filename,
+                             date=datetime(2014, 2, 2, 17, 12, idx))
+        self._add_repository('gitrepos')
+        repos = self._repomgr.get_repository('gitrepos')
+        revs = [entry[1] for entry in repos.repos.get_node('').get_history()]
+        revs.reverse()
+        revs2 = []
+        def feedback(rev):
+            revs2.append(rev)
+        repos.sync(feedback=feedback)
+        self.assertEqual(revs, revs2)
+        self.assertEqual(4, len(revs2))
+
+        revs2 = []
+        def feedback_1(rev):
+            revs2.append(rev)
+            if len(revs2) == 2:
+                raise StopSync
+        def feedback_2(rev):
+            revs2.append(rev)
+        try:
+            repos.sync(feedback=feedback_1, clean=True)
+        except StopSync:
+            self.assertEqual(revs[:2], revs2)
+            repos.sync(feedback=feedback_2)  # restart sync
+        self.assertEqual(revs, revs2)
+
+    def test_sync_merge(self):
+        self._git_init()
+        self._create_merge_commit()
+
+        self._add_repository('gitrepos')
+        repos = self._repomgr.get_repository('gitrepos')
+        youngest_rev = repos.repos.youngest_rev
+        oldest_rev = repos.repos.oldest_rev
+
+        revs = []
+        def feedback(rev):
+            revs.append(rev)
+        repos.sync(feedback=feedback)
+        self.assertEqual(6, len(revs))
+        self.assertEqual(youngest_rev, revs[-1])
+        self.assertEqual(oldest_rev, revs[0])
+
+        revs2 = []
+        def feedback_1(rev):
+            revs2.append(rev)
+            if len(revs2) == 3:
+                raise StopSync
+        def feedback_2(rev):
+            revs2.append(rev)
+        try:
+            repos.sync(feedback=feedback_1, clean=True)
+        except StopSync:
+            self.assertEqual(revs[:3], revs2)
+            repos.sync(feedback=feedback_2)  # restart sync
+        self.assertEqual(revs, revs2)
+
+
+class StopSync(Exception):
+    pass
+
+
 class GitConnectorTestCase(BaseTestCase):
 
     def _git_version_from_system_info(self):
@@ -335,6 +538,8 @@ def suite():
         suite.addTest(unittest.makeSuite(PersistentCacheTestCase))
         suite.addTest(unittest.makeSuite(HistoryTimeRangeTestCase))
         suite.addTest(unittest.makeSuite(GitNormalTestCase))
+        suite.addTest(unittest.makeSuite(GitRepositoryTestCase))
+        suite.addTest(unittest.makeSuite(GitCachedRepositoryTestCase))
         suite.addTest(unittest.makeSuite(GitConnectorTestCase))
     else:
         print("SKIP: tracopt/versioncontrol/git/tests/git_fs.py (git cli "

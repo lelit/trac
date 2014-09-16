@@ -22,6 +22,32 @@
     }
   }
 
+  // Add a Select All checkbox to each thead in the table.
+  $.fn.addSelectAllCheckboxes = function() {
+    var $table = this;
+    if ($("tr td.sel", $table).length > 0) {
+      $("tr th.sel", $table).append(
+        $('<input type="checkbox" name="toggle_group" />').attr({
+          title: _("Toggle group")
+        }).click(function() {
+          $("tr td.sel input",
+            $(this).closest("thead, tbody").next())
+              .prop("checked", this.checked).change();
+        })
+      );
+      $("tr td.sel", $table).click(function() {
+        var $tbody = $(this).closest("tbody");
+        var $checkboxes = $("tr td.sel input", $tbody);
+        var numSelected = $checkboxes.filter(":checked").length;
+        var noneSelected = numSelected === 0;
+        var allSelected = numSelected === $checkboxes.length;
+        $("tr th.sel input", $tbody.prev())
+          .prop({"checked": allSelected,
+                 "indeterminate": !(noneSelected || allSelected)});
+      });
+    }
+  }
+
   // Conditionally disable the submit button. Returns a jQuery object.
   $.fn.disableSubmit = function(determinant) {
     determinant = $(determinant);
@@ -162,24 +188,6 @@
     if (!textarea || textarea.rows == undefined) return;
     $(textarea).height("");
     textarea.rows = rows;
-  }
-
-  // The following are defined for backwards compatibility with releases prior
-  // to Trac 0.11
-
-  window.addEvent = function(elem, type, func) {
-    $(elem).bind(type, func);
-  }
-  window.addHeadingLinks = function(container, title) {
-    $.each(["h1", "h2", "h3", "h4", "h5", "h6"], function() {
-      $(this, container).addAnchor(title);
-    });
-  }
-  window.enableControl = function(id, enabled) {
-    $("#" + id).enable(enabled);
-  }
-  window.getAncestorByTagName = function(elem, tagName) {
-    return $(elem).parents(tagName).get(0);
   }
 
 })(jQuery);

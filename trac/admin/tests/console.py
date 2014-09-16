@@ -188,6 +188,8 @@ class TracadminTestCase(unittest.TestCase):
             'version': __version__,
             'date_format_hint': get_date_format_hint()
         })
+        self.assertTrue(all(len(line) < 80 for line in output.split('\n')),
+                        "Lines should be less than 80 characters in length.")
 
     # Locale test
 
@@ -1259,6 +1261,21 @@ class TracadminTestCase(unittest.TestCase):
         rv, output = self._execute('session set email name00 JOHN@EXAMPLE.ORG')
         self.assertEqual(0, rv, output)
         rv, output = self._execute('session list name00')
+        self.assertExpectedResult(output)
+
+    def test_session_set_attr_default_handler(self):
+        _prep_session_table(self.env)
+        rv, output = \
+            self._execute('session set default_handler name00 SearchModule')
+        self.assertEqual(0, rv, output)
+        rv, output = self._execute('session list name00')
+        self.assertExpectedResult(output)
+
+    def test_session_set_attr_default_handler_invalid(self):
+        _prep_session_table(self.env)
+        rv, output = \
+            self._execute('session set default_handler name00 InvalidModule')
+        self.assertEqual(2, rv, output)
         self.assertExpectedResult(output)
 
     def test_session_set_attr_missing_attr(self):

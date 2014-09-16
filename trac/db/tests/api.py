@@ -315,12 +315,12 @@ class StringsTestCase(unittest.TestCase):
             "SELECT value FROM system WHERE name='test-markup'"))
 
     def test_quote(self):
-        db = self.env.get_db_cnx()
-        cursor = db.cursor()
-        cursor.execute('SELECT 1 AS %s' % \
-                       db.quote(r'alpha\`\"\'\\beta``gamma""delta'))
-        self.assertEqual(r'alpha\`\"\'\\beta``gamma""delta',
-                         get_column_names(cursor)[0])
+        with self.env.db_query as db:
+            cursor = db.cursor()
+            cursor.execute('SELECT 1 AS %s' % \
+                           db.quote(r'alpha\`\"\'\\beta``gamma""delta'))
+            self.assertEqual(r'alpha\`\"\'\\beta``gamma""delta',
+                             get_column_names(cursor)[0])
 
     def test_quoted_id_with_percent(self):
         db = self.env.get_read_db()
@@ -344,6 +344,54 @@ class StringsTestCase(unittest.TestCase):
 
         test(db)
         test(db, logging=True)
+
+    def test_prefix_match_case_sensitive(self):
+        @self.env.with_transaction()
+        def do_insert(db):
+            cursor = db.cursor()
+            cursor.executemany("INSERT INTO system (name,value) VALUES (%s,1)",
+                               [('blahblah',), ('BlahBlah',), ('BLAHBLAH',),
+                                (u'BlähBlah',), (u'BlahBläh',)])
+
+        db = self.env.get_read_db()
+        cursor = db.cursor()
+        cursor.execute("SELECT name FROM system WHERE name %s" %
+                       db.prefix_match(),
+                       (db.prefix_match_value('Blah'),))
+        names = sorted(name for name, in cursor)
+        self.assertEqual('BlahBlah', names[0])
+        self.assertEqual(u'BlahBläh', names[1])
+        self.assertEqual(2, len(names))
+
+    def test_prefix_match_metachars(self):
+        def do_query(prefix):
+            db = self.env.get_read_db()
+            cursor = db.cursor()
+            cursor.execute("SELECT name FROM system WHERE name %s "
+                           "ORDER BY name" % db.prefix_match(),
+                           (db.prefix_match_value(prefix),))
+            return [name for name, in cursor]
+
+        @self.env.with_transaction()
+        def do_insert(db):
+            values = ['foo*bar', 'foo*bar!', 'foo?bar', 'foo?bar!',
+                      'foo[bar', 'foo[bar!', 'foo]bar', 'foo]bar!',
+                      'foo%bar', 'foo%bar!', 'foo_bar', 'foo_bar!',
+                      'foo/bar', 'foo/bar!', 'fo*ob?ar[fo]ob%ar_fo/obar']
+            cursor = db.cursor()
+            cursor.executemany("INSERT INTO system (name,value) VALUES (%s,1)",
+                               [(value,) for value in values])
+
+        self.assertEqual(['foo*bar', 'foo*bar!'], do_query('foo*'))
+        self.assertEqual(['foo?bar', 'foo?bar!'], do_query('foo?'))
+        self.assertEqual(['foo[bar', 'foo[bar!'], do_query('foo['))
+        self.assertEqual(['foo]bar', 'foo]bar!'], do_query('foo]'))
+        self.assertEqual(['foo%bar', 'foo%bar!'], do_query('foo%'))
+        self.assertEqual(['foo_bar', 'foo_bar!'], do_query('foo_'))
+        self.assertEqual(['foo/bar', 'foo/bar!'], do_query('foo/'))
+        self.assertEqual(['fo*ob?ar[fo]ob%ar_fo/obar'], do_query('fo*'))
+        self.assertEqual(['fo*ob?ar[fo]ob%ar_fo/obar'],
+                         do_query('fo*ob?ar[fo]ob%ar_fo/obar'))
 
 
 class ConnectionTestCase(unittest.TestCase):

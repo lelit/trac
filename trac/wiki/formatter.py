@@ -189,7 +189,8 @@ class WikiProcessor(object):
                     self.processor = self._mimeview_processor
         if not self.processor:
             self.processor = self._default_processor
-            self.error = "No macro or processor named '%s' found" % name
+            self.error = _("No macro or processor named '%(name)s' found",
+                           name=name)
 
     # inline checks
 
@@ -364,8 +365,8 @@ class WikiProcessor(object):
 
     def process(self, text, in_paragraph=False):
         if self.error:
-            text = system_message(tag('Error: Failed to load processor ',
-                                      tag.code(self.name)),
+            text = system_message(tag_("Error: Failed to load processor "
+                                       "%(name)s", name=tag.code(self.name)),
                                   self.error)
         else:
             text = self.processor(text)
@@ -416,17 +417,11 @@ class Formatter(object):
 
     flavor = 'default'
 
-    # 0.10 compatibility
-    INTERTRAC_SCHEME = WikiParser.INTERTRAC_SCHEME
-    QUOTED_STRING = WikiParser.QUOTED_STRING
-    LINK_SCHEME = WikiParser.LINK_SCHEME
-
     def __init__(self, env, context):
-        """Note: `req` is still temporarily used."""
         self.env = env
         self.context = context.child()
         self.context.set_hints(disable_warnings=True)
-        self.req = context.req
+        self.req = context.req  # Deprecated and will be removed in 1.3.1
         self.href = context.href
         self.resource = context.resource
         self.perm = context.perm
@@ -740,8 +735,7 @@ class Formatter(object):
             return self._make_ext_link(url, label, title)
 
     def _make_ext_link(self, url, text, title=''):
-        local_url = self.env.project_url or \
-                    (self.req or self.env).abs_href.base
+        local_url = self.env.project_url or self.env.abs_href.base
         if not url.startswith(local_url):
             return tag.a(tag.span(u'\u200b', class_="icon"), text,
                          class_="ext-link", href=url, title=title or None)
@@ -811,8 +805,8 @@ class Formatter(object):
         except Exception as e:
             self.env.log.error('Macro %s(%s) failed:%s', name, args,
                                exception_to_unicode(e, traceback=True))
-            return system_message('Error: Macro %s(%s) failed' % (name, args),
-                                  to_unicode(e))
+            return system_message(_("Error: Macro %(name)s(%(args)s) failed",
+                                    name=name, args=args), to_unicode(e))
 
     # Headings
 
@@ -1171,7 +1165,8 @@ class Formatter(object):
                                          for l in self.code_buf]
                     self.code_buf.append('')
                 code_text = os.linesep.join(self.code_buf)
-                processed = self.code_processor.process(code_text)
+                processed = self._exec_processor(self.code_processor,
+                                                 code_text)
                 self.out.write(_markup_to_unicode(processed))
             else:
                 self.code_buf.append(line)
@@ -1191,6 +1186,15 @@ class Formatter(object):
     def close_code_blocks(self):
         while self.in_code_block > 0:
             self.handle_code_block(WikiParser.ENDBLOCK)
+
+    def _exec_processor(self, processor, text):
+        try:
+            return processor.process(text)
+        except Exception, e:
+            self.env.log.error('Processor %s failed:%s', processor.name,
+                               exception_to_unicode(e, traceback=True))
+            return system_message(_("Error: Processor %(name)s failed",
+                                    name=processor.name), to_unicode(e))
 
     # > quotes
 

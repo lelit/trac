@@ -31,15 +31,14 @@ from trac.util.datefmt import http_date, to_datetime, utc
 from trac.util.html import Markup, escape
 from trac.util.text import exception_to_unicode, shorten_line
 from trac.util.translation import _, cleandoc_
+from trac.versioncontrol.api import NoSuchChangeset, RepositoryManager
+from trac.versioncontrol.web_ui.util import *
 from trac.web.api import IRequestHandler, RequestDone
 from trac.web.chrome import (INavigationContributor, add_ctxtnav, add_link,
                              add_script, add_stylesheet, prevnext_nav,
                              web_context)
 from trac.wiki.api import IWikiMacroProvider, IWikiSyntaxProvider, parse_args
 from trac.wiki.formatter import format_to_html, format_to_oneliner
-
-from ..api import NoSuchChangeset, RepositoryManager
-from trac.versioncontrol.web_ui.util import * # `from .util import *` FIXME 2.6
 
 
 CHUNK_SIZE = 4096
@@ -354,8 +353,6 @@ class BrowserModule(Component):
         if not repos and reponame:
             raise ResourceNotFound(_("Repository '%(repo)s' not found",
                                      repo=reponame))
-        if repos and not repos.is_viewable(req.perm):
-            raise PermissionError('BROWSER_VIEW', repos.resource, self.env)
 
         if reponame and reponame != repos.reponame: # Redirect alias
             qs = req.query_string
@@ -411,7 +408,13 @@ class BrowserModule(Component):
                 file_data = self._render_file(req, context, repos, node, rev)
 
         if not repos and not (repo_data and repo_data['repositories']):
-            raise ResourceNotFound(_("No node %(path)s", path=path))
+            # If no viewable repositories, check permission instead of
+            # repos.is_viewable()
+            req.perm.require('BROWSER_VIEW')
+            if show_index:
+                raise ResourceNotFound(_("No viewable repositories"))
+            else:
+                raise ResourceNotFound(_("No node %(path)s", path=path))
 
         quickjump_data = properties_data = None
         if node and not xhr:
@@ -514,6 +517,10 @@ class BrowserModule(Component):
                 continue
             try:
                 repos = rm.get_repository(reponame)
+            except TracError as err:
+                entry = (reponame, repoinfo, None, None,
+                         exception_to_unicode(err), None)
+            else:
                 if repos:
                     if not repos.is_viewable(context.perm):
                         continue
@@ -532,10 +539,7 @@ class BrowserModule(Component):
                              raw_href)
                 else:
                     entry = (reponame, repoinfo, None, None, u"\u2013", None)
-            except TracError as err:
-                entry = (reponame, repoinfo, None, None,
-                         exception_to_unicode(err), None)
-            if entry[-1] is not None:   # Check permission in case of error
+            if entry[4] is not None:  # Check permission in case of error
                 root = Resource('repository', reponame).child('source', '/')
                 if 'BROWSER_VIEW' not in context.perm(root):
                     continue

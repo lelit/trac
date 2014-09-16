@@ -20,7 +20,7 @@ from genshi import Markup
 
 from trac.core import *
 from trac.config import Option
-from trac.db.api import Connection, IDatabaseConnector, _parse_db_str
+from trac.db.api import ConnectionBase, IDatabaseConnector, _parse_db_str
 from trac.db.util import ConnectionWrapper, IterableCursor
 from trac.env import ISystemInfoProvider
 from trac.util import get_pkginfo, lazy
@@ -213,7 +213,7 @@ class PostgreSQLConnector(Component):
         return dest_file
 
 
-class PostgreSQLConnection(Connection, ConnectionWrapper):
+class PostgreSQLConnection(ConnectionBase, ConnectionWrapper):
     """Connection wrapper for PostgreSQL."""
 
     poolable = True
@@ -285,6 +285,12 @@ class PostgreSQLConnection(Connection, ConnectionWrapper):
 
     def like_escape(self, text):
         return _like_escape_re.sub(r'/\1', text)
+
+    def prefix_match(self):
+        return "LIKE %s ESCAPE '/'"
+
+    def prefix_match_value(self, prefix):
+        return self.like_escape(prefix) + '%'
 
     def quote(self, identifier):
         return '"%s"' % identifier.replace('"', '""')

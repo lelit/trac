@@ -36,7 +36,7 @@ from trac.ticket.api import TicketSystem, ITicketManipulator
 from trac.ticket.model import Milestone, Ticket, group_milestones
 from trac.ticket.notification import TicketNotifyEmail
 from trac.timeline.api import ITimelineEventProvider
-from trac.util import as_bool, as_int, get_reporter_id
+from trac.util import as_bool, as_int, get_reporter_id, lazy
 from trac.util.datefmt import (
     format_date_or_datetime, from_utimestamp, get_date_format_hint,
     get_datetime_format_hint, parse_date, to_utimestamp, user_time, utc
@@ -113,25 +113,11 @@ class TicketModule(Component):
     def __init__(self):
         self._warn_for_default_attr = set()
 
-    def __getattr__(self, name):
-        """Delegate access to ticket default Options which were move to
-        TicketSystem.
-
-        .. todo:: remove in 1.0
-        """
-        if name.startswith('default_'):
-            if name not in self._warn_for_default_attr:
-                self.log.warning("%s option should be accessed via "
-                                 "TicketSystem component", name)
-                self._warn_for_default_attr.add(name)
-            return getattr(TicketSystem(self.env), name)
-        raise AttributeError("TicketModule has no attribute '%s'" % name)
-
-    @property
+    @lazy
     def must_preserve_newlines(self):
         preserve_newlines = self.preserve_newlines
         if preserve_newlines == 'default':
-            preserve_newlines = self.env.get_version(initial=True) >= 21 # 0.11
+            preserve_newlines = self.env.database_initial_version >= 21 # 0.11
         return as_bool(preserve_newlines)
 
     # IContentConverter methods
@@ -1266,8 +1252,9 @@ class TicketModule(Component):
                 value = ticket[name]
                 if value:
                     if value not in field['options']:
-                        add_warning(req, '"%s" is not a valid value for '
-                                    'the %s field.' % (value, name))
+                        add_warning(req, _('"%(value)s" is not a valid value '
+                                           'for the %(name)s field.',
+                                           value=value, name=name))
                         valid = False
                 elif not field.get('optional', False):
                     add_warning(req, _("field %(name)s must be set",
