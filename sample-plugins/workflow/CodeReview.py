@@ -32,7 +32,7 @@ class CodeReviewActionController(Component):
     Example (from the enterprise-review-workflow.ini):
     {{{
     review = in_review -> *
-    review.name = review as
+    review.label = review as
     review.operations = code_review
     review.code_review =
       approve -> in_QA,
@@ -67,7 +67,7 @@ class CodeReviewActionController(Component):
             controller = ConfigurableTicketWorkflow(self.env)
             actions_we_handle = controller.get_actions_by_operation_for_req(
                 req, ticket, 'code_review')
-        self.log.debug('code review handles actions: %r' % actions_we_handle)
+        self.log.debug('code review handles actions: %r', actions_we_handle)
         return actions_we_handle
 
     def get_all_status(self):
@@ -88,7 +88,7 @@ class CodeReviewActionController(Component):
 
         selected_value = grade or review_options[0][0]
 
-        label = actions[action]['name']
+        label = actions[action]['label']
         control = tag(["as: ",
                        tag.select([tag.option(option, selected=
                                               (option == selected_value or

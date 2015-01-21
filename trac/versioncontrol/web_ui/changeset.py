@@ -126,11 +126,13 @@ class ChangesetModule(Component):
 
     property_diff_renderers = ExtensionPoint(IPropertyDiffRenderer)
 
+    realm = RepositoryManager.changeset_realm
+
     timeline_show_files = Option('timeline', 'changeset_show_files', '0',
         """Number of files to show (`-1` for unlimited, `0` to disable).
 
         This can also be `location`, for showing the common prefix for the
-        changed files. (''since 0.11'')
+        changed files.
         """)
 
     timeline_long_messages = BoolOption('timeline', 'changeset_long_messages',
@@ -147,16 +149,16 @@ class ChangesetModule(Component):
         """Whether consecutive changesets from the same author having
         exactly the same message should be presented as one event.
         That event will link to the range of changesets in the log view.
-        (''since 0.11'')""")
+        """)
 
     max_diff_files = IntOption('changeset', 'max_diff_files', 0,
         """Maximum number of modified files for which the changeset view will
-        attempt to show the diffs inlined. (''since 0.10'')""")
+        attempt to show the diffs inlined.""")
 
     max_diff_bytes = IntOption('changeset', 'max_diff_bytes', 10000000,
         """Maximum total size in bytes of the modified files (their old size
         plus their new size) for which the changeset view will attempt to show
-        the diffs inlined. (''since 0.10'')""")
+        the diffs inlined.""")
 
     wiki_format_messages = BoolOption('changeset', 'wiki_format_messages',
                                       'true',
@@ -419,7 +421,7 @@ class ChangesetModule(Component):
             title = _changeset_title(rev)
 
             # Support for revision properties (#2545)
-            context = web_context(req, 'changeset', chgset.rev,
+            context = web_context(req, self.realm, chgset.rev,
                                   parent=repos.resource)
             data['context'] = context
             revprops = chgset.get_properties()
@@ -877,7 +879,7 @@ class ChangesetModule(Component):
                                              key=collapse_changesets):
                     viewable_changesets = []
                     for cset in changesets:
-                        cset_resource = Resource('changeset', cset.rev,
+                        cset_resource = Resource(self.realm, cset.rev,
                                                  parent=repos.resource)
                         if cset.is_viewable(req.perm):
                             repos_for_uid = [repos.reponame]
@@ -1121,22 +1123,28 @@ class ChangesetModule(Component):
         rm = RepositoryManager(self.env)
         repositories = dict((repos.params['id'], repos)
                             for repos in rm.get_real_repositories())
+        uids_seen = set()
         with self.env.db_query as db:
             sql, args = search_to_sql(db, ['rev', 'message', 'author'], terms)
             for id, rev, ts, author, log in db("""
                     SELECT repos, rev, time, author, message
                     FROM revision WHERE """ + sql, args):
-                try:
-                    rev = int(rev)
-                except ValueError:
-                    pass
                 repos = repositories.get(id)
                 if not repos:
                     continue  # revisions for a no longer active repository
-                cset = repos.resource.child('changeset', rev)
+                try:
+                    rev = repos.normalize_rev(rev)
+                    drev = repos.display_rev(rev)
+                except NoSuchChangeset:
+                    continue
+                uid = repos.get_changeset_uid(rev)
+                if uid in uids_seen:
+                    continue
+                cset = repos.resource.child(self.realm, rev)
                 if 'CHANGESET_VIEW' in req.perm(cset):
+                    uids_seen.add(uid)
                     yield (req.href.changeset(rev, repos.reponame or None),
-                           '[%s]: %s' % (rev, shorten_line(log)),
+                           '[%s]: %s' % (drev, shorten_line(log)),
                            from_utimestamp(ts), author,
                            shorten_result(log, terms))
 

@@ -12,6 +12,7 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
+from genshi.builder import tag
 from trac.tests.functional import *
 from trac.mimeview.rst import has_docutils
 from trac.util import create_file, get_pkginfo
@@ -27,6 +28,29 @@ class TestWiki(FunctionalTwillTestCaseSetup):
         """Create a wiki page."""
         self._tester.create_wiki_page()
 
+
+class TestWikiDelete(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Delete a wiki page."""
+        name = self._tester.create_wiki_page()
+        self._tester.go_to_wiki(name)
+        tc.formvalue('delete', 'action', 'delete')
+        tc.submit()
+        tc.notfind("The following attachments will also be deleted:")
+        tc.submit('delete', 'delete-confirm')
+        tc.find("The page %s has been deleted." % name)
+        tc.url(self._tester.url)
+
+        name = self._tester.create_wiki_page()
+        filename = self._tester.attach_file_to_wiki(name)
+        self._tester.go_to_wiki(name)
+        tc.formvalue('delete', 'action', 'delete')
+        tc.submit()
+        tc.find("The following attachments will also be deleted:")
+        tc.find(filename)
+        tc.submit('delete', 'delete-confirm')
+        tc.find("The page %s has been deleted." % name)
+        tc.url(self._tester.url)
 
 class TestWikiAddAttachment(FunctionalTwillTestCaseSetup):
     def runTest(self):
@@ -242,7 +266,7 @@ class TestWikiRename(FunctionalTwillTestCaseSetup):
         # this time, the original page is gone
         tc.go(page_url)
         tc.url(page_url)
-        tc.find("The page %s does not exist" % pagename)
+        tc.find("The page %s does not exist" % tag.strong(pagename))
 
 
 class RegressionTestTicket4812(FunctionalTwillTestCaseSetup):
@@ -477,6 +501,7 @@ def functionalSuite(suite=None):
         import trac.tests.functional
         suite = trac.tests.functional.functionalSuite()
     suite.addTest(TestWiki())
+    suite.addTest(TestWikiDelete())
     suite.addTest(TestWikiAddAttachment())
     suite.addTest(TestWikiPageManipulator())
     suite.addTest(TestWikiHistory())

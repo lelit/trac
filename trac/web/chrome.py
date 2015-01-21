@@ -52,7 +52,7 @@ from trac.util import compat, get_reporter_id, html, presentation, \
 from trac.util.html import escape, plaintext
 from trac.util.text import pretty_size, obfuscate_email_address, \
                            shorten_line, unicode_quote_plus, to_unicode, \
-                           javascript_quote, exception_to_unicode
+                           javascript_quote, exception_to_unicode, to_js_string
 from trac.util.datefmt import (
     pretty_timedelta, format_datetime, format_date, format_time,
     from_utimestamp, http_date, utc, get_date_format_jquery_ui, is_24_hours,
@@ -304,6 +304,47 @@ def auth_link(req, link):
     return link
 
 
+def chrome_info_script(req, use_late=None):
+    """Get script elements from chrome info of the request object during
+    rendering template or after rendering.
+
+    :param      req: the HTTP request object.
+    :param use_late: if True, `late_links` will be used instead of `links`.
+    """
+    chrome = req.chrome
+    if use_late:
+        links = chrome.get('late_links', {}).get('stylesheet', [])
+        scripts = chrome.get('late_scripts', [])
+        script_data = chrome.get('late_script_data', {})
+    else:
+        links = chrome.get('early_links', {}).get('stylesheet', []) + \
+                chrome.get('links', {}).get('stylesheet', [])
+        scripts = chrome.get('early_scripts', []) + chrome.get('scripts', [])
+        script_data = {}
+        script_data.update(chrome.get('early_script_data', {}))
+        script_data.update(chrome.get('script_data', {}))
+
+    content = []
+    content.extend('jQuery.loadStyleSheet(%s, %s);' %
+                   (to_js_string(link['href']), to_js_string(link['type']))
+                   for link in links or ())
+    content.extend('var %s=%s;' % (name, presentation.to_json(value))
+                   for name, value in (script_data or {}).iteritems())
+
+    fragment = tag()
+    if content:
+        fragment.append(tag.script('\n'.join(content), type='text/javascript'))
+    for script in scripts:
+        fragment.append(script['prefix'])
+        fragment.append(tag.script(
+            'jQuery.loadScript(%s, %s, %s)' %
+            (to_js_string(script['href']), to_js_string(script['type']),
+             to_js_string(script['charset'])), type='text/javascript'))
+        fragment.append(script['suffix'])
+
+    return fragment
+
+
 def _chrome_resource_path(req, filename):
     """Get the path for a chrome resource given its `filename`.
 
@@ -358,8 +399,7 @@ class Chrome(Component):
 
         Templates in that directory are loaded in addition to those in the
         environments `templates` directory, but the latter take precedence.
-
-        (''since 0.11'')""")
+        """)
 
     shared_htdocs_dir = PathOption('inherit', 'htdocs_dir', '',
         """Path to the //shared htdocs directory//.
@@ -471,18 +511,21 @@ class Chrome(Component):
         """Height of the header logo image in pixels.""")
 
     show_email_addresses = BoolOption('trac', 'show_email_addresses', 'false',
-        """Show email addresses instead of usernames. If false, we obfuscate
-        email addresses. (''since 0.11'')""")
+        """Show email addresses instead of usernames. If false, email
+        addresses are obfuscated for users that don't have EMAIL_VIEW
+        permission.
+        """)
 
     never_obfuscate_mailto = BoolOption('trac', 'never_obfuscate_mailto',
         'false',
         """Never obfuscate `mailto:` links explicitly written in the wiki,
         even if `show_email_addresses` is false or the user doesn't have
-        EMAIL_VIEW permission. (''since 0.11.6'')""")
+        EMAIL_VIEW permission.
+        """)
 
     show_ip_addresses = BoolOption('trac', 'show_ip_addresses', 'false',
         """Show IP addresses for resource edits (e.g. wiki).
-        (''since 0.11.3'')""")
+        """)
 
     resizable_textareas = BoolOption('trac', 'resizable_textareas', 'true',
         """Make `<textarea>` fields resizable. Requires !JavaScript.
@@ -498,8 +541,8 @@ class Chrome(Component):
         lower the setting, the more requests will be made to the server. Set
         this to 0 to disable automatic preview. (''since 0.12'')""")
 
-    default_dateinfo_format = Option('trac', 'default_dateinfo_format',
-        'relative',
+    default_dateinfo_format = ChoiceOption('trac', 'default_dateinfo_format',
+                                           ('relative', 'absolute'),
         """The date information format. Valid options are 'relative' for
         displaying relative format and 'absolute' for displaying absolute
         format. (''since 1.0'')""")
@@ -730,24 +773,23 @@ class Chrome(Component):
                     category_section = self.config[category]
                     if category_section.getbool(name, True):
                         # the navigation item is enabled (this is the default)
-                        item = None
-                        if isinstance(text, Element) and \
-                                text.tag.localname == 'a':
-                            item = text
+                        item = text if isinstance(text, Element) and \
+                                       text.tag.localname == 'a' \
+                                    else None
                         label = category_section.get(name + '.label')
                         href = category_section.get(name + '.href')
-                        if href:
-                            if href.startswith('/'):
-                                href = req.href + href
+                        if href and href.startswith('/'):
+                            href = req.href + href
+                        if item:
                             if label:
-                                item = tag.a(label)  # create new label
-                            elif not item:
-                                item = tag.a(text)  # wrap old text
-                            item = item(href=href)  # use new href
-                        elif label and item:  # create new label, use old href
-                            item = tag.a(label, href=item.attrib.get('href'))
-                        elif not item:  # use old text
-                            item = text
+                                item.children[0] = label
+                            if href:
+                                item = item(href=href)
+                        else:
+                            if href or label:
+                                item = tag.a(label or text, href=href)
+                            else:
+                                item = text
                         allitems.setdefault(category, {})[name] = item
                 if contributor is handler:
                     active = contributor.get_active_navigation_item(req)
@@ -873,8 +915,8 @@ class Chrome(Component):
             })
 
         try:
-            show_email_addresses = (self.show_email_addresses or not req or
-                                    'EMAIL_VIEW' in req.perm)
+            show_email_addresses = self.show_email_addresses or \
+                                   not req or 'EMAIL_VIEW' in req.perm
         except Exception as e:
             # simply log the exception here, as we might already be rendering
             # the error page
@@ -929,6 +971,7 @@ class Chrome(Component):
             'name_of': partial(get_resource_name, self.env),
             'shortname_of': partial(get_resource_shortname, self.env),
             'summary_of': partial(get_resource_summary, self.env),
+            'resource_link': partial(render_resource_link, self.env),
             'req': req,
             'abs_href': abs_href,
             'href': href,
@@ -1052,9 +1095,9 @@ class Chrome(Component):
         links = req.chrome.get('links')
         scripts = req.chrome.get('scripts')
         script_data = req.chrome.get('script_data')
-        req.chrome['links'] = {}
-        req.chrome['scripts'] = []
-        req.chrome['script_data'] = {}
+        req.chrome.update({'early_links': links, 'early_scripts': scripts,
+                           'early_script_data': script_data,
+                           'links': {}, 'scripts': [], 'script_data': {}})
         data.setdefault('chrome', {}).update({
             'late_links': req.chrome['links'],
             'late_scripts': req.chrome['scripts'],
@@ -1069,9 +1112,9 @@ class Chrome(Component):
                                                _invalid_control_chars)
         except Exception as e:
             # restore what may be needed by the error template
-            req.chrome['links'] = links
-            req.chrome['scripts'] = scripts
-            req.chrome['script_data'] = script_data
+            req.chrome.update({'early_links': None, 'early_scripts': None,
+                               'early_script_data': None, 'links': links,
+                               'scripts': scripts, 'script_data': script_data})
             # give some hints when hitting a Genshi unicode error
             if isinstance(e, UnicodeError):
                 pos = self._stream_location(stream)
@@ -1085,6 +1128,36 @@ class Chrome(Component):
                                   location=location))
             raise
 
+    def get_interface_customization_files(self):
+        """Returns a dictionary containing the lists of files present in the
+        site and shared templates and htdocs directories.
+        """
+        files = {}
+        # Collect templates list
+        site_templates = sorted(os.listdir(self.env.get_templates_dir()))
+        site_templates = [t for t in site_templates
+                            if t.endswith('.html')]
+        shared_templates = []
+        shared_templates_dir = Chrome(self.env).shared_templates_dir
+        if os.path.exists(shared_templates_dir):
+            shared_templates = sorted(os.listdir(shared_templates_dir))
+            shared_templates = [t for t in shared_templates
+                                  if t.endswith('.html')]
+        # Collect static resources list
+        site_htdocs = sorted(os.listdir(self.env.get_htdocs_dir()))
+        shared_htdocs = []
+        shared_htdocs_dir = Chrome(self.env).shared_htdocs_dir
+        if os.path.exists(shared_htdocs_dir):
+            shared_htdocs = sorted(os.listdir(shared_htdocs_dir))
+        if any((site_templates, shared_templates, site_htdocs, shared_htdocs)):
+            files = {
+                'site-templates': site_templates,
+                'shared-templates': shared_templates,
+                'site-htdocs': site_htdocs,
+                'shared-htdocs': shared_htdocs,
+            }
+        return files
+
     # E-mail formatting utilities
 
     def author_email(self, author, email_map):
@@ -1096,19 +1169,22 @@ class Chrome(Component):
 
     def authorinfo(self, req, author, email_map=None):
         author = self.author_email(author, email_map)
-        return tag.span(self.format_author(req, author), class_='trac-author')
+        suffix = ''
+        if author == 'anonymous':
+            suffix = '-anonymous'
+        elif not author:
+            suffix = '-none'
+        return tag.span(self.format_author(req, author),
+                        class_='trac-author' + suffix)
 
     _long_author_re = re.compile(r'.*<([^@]+)@[^@]+>\s*|([^@]+)@[^@]+')
 
     def authorinfo_short(self, author):
-        shortened = author
-        if not author or author == 'anonymous':
-            shortened = _("anonymous")
-        else:
-            match = self._long_author_re.match(author)
-            if match:
-                shortened = match.group(1) or match.group(2)
-        return tag.span(shortened, class_='trac-author')
+        shortened = None
+        match = self._long_author_re.match(author or '')
+        if match:
+            shortened = match.group(1) or match.group(2)
+        return self.authorinfo(None, shortened or author)
 
     def cc_list(self, cc_field):
         """Split a CC: value in a list of addresses."""
@@ -1120,8 +1196,10 @@ class Chrome(Component):
         return ccs
 
     def format_author(self, req, author):
-        if not author or author == 'anonymous':
+        if author == 'anonymous':
             return _("anonymous")
+        if not author:
+            return _("(none)")
         if self.show_email_addresses or not req or 'EMAIL_VIEW' in req.perm:
             return author
         return obfuscate_email_address(author)

@@ -117,15 +117,13 @@ class WikiPropertyRenderer(Component):
                                  'trac:description',
         doc="""Comma-separated list of version control properties to render
         as wiki content in the repository browser.
-
-        (''since 0.11'')""")
+        """)
 
     oneliner_properties = ListOption('browser', 'oneliner_properties',
                                  'trac:summary',
         doc="""Comma-separated list of version control properties to render
         as oneliner wiki content in the repository browser.
-
-        (''since 0.11'')""")
+        """)
 
     def match_property(self, name, mode):
         return 4 if name in self.wiki_properties \
@@ -179,6 +177,8 @@ class BrowserModule(Component):
 
     property_renderers = ExtensionPoint(IPropertyRenderer)
 
+    realm = RepositoryManager.source_realm
+
     downloadable_paths = ListOption('browser', 'downloadable_paths',
                                     '/trunk, /branches/*, /tags/*',
         doc="""List of repository paths that can be downloaded.
@@ -190,14 +190,14 @@ class BrowserModule(Component):
         repository name if the path does not point to the default repository
         (e.g. /reponame/trunk). Note that a simple prefix matching is
         performed on the paths, so aliases won't get automatically resolved.
-        (''since 0.10'')""")
+        """)
 
     color_scale = BoolOption('browser', 'color_scale', True,
         doc="""Enable colorization of the ''age'' column.
 
         This uses the same color scale as the source code annotation:
         blue is older, red is newer.
-        (''since 0.11'')""")
+        """)
 
     NEWEST_COLOR = (255, 136, 136)
 
@@ -205,7 +205,7 @@ class BrowserModule(Component):
         doc="""(r,g,b) color triple to use for the color corresponding
         to the newest color, for the color scale used in ''blame'' or
         the browser ''age'' column if `color_scale` is enabled.
-        (''since 0.11'')""")
+        """)
 
     OLDEST_COLOR = (136, 136, 255)
 
@@ -213,13 +213,13 @@ class BrowserModule(Component):
         doc="""(r,g,b) color triple to use for the color corresponding
         to the oldest color, for the color scale used in ''blame'' or
         the browser ''age'' column if `color_scale` is enabled.
-        (''since 0.11'')""")
+        """)
 
     intermediate_point = Option('browser', 'intermediate_point', '',
         doc="""If set to a value between 0 and 1 (exclusive), this will be the
         point chosen to set the `intermediate_color` for interpolating
         the color value.
-        (''since 0.11'')""")
+        """)
 
     intermediate_color = Option('browser', 'intermediate_color', '',
         doc="""(r,g,b) color triple to use for the color corresponding
@@ -227,7 +227,7 @@ class BrowserModule(Component):
         for the color scale (see `intermediate_point`).
         If not set, the intermediate color between `oldest_color` and
         `newest_color` will be used.
-        (''since 0.11'')""")
+        """)
 
     render_unsafe_content = BoolOption('browser', 'render_unsafe_content',
                                         'false',
@@ -244,7 +244,7 @@ class BrowserModule(Component):
     hidden_properties = ListOption('browser', 'hide_properties', 'svk:merge',
         doc="""Comma-separated list of version control properties to hide from
         the repository browser.
-        (''since 0.9'')""")
+        """)
 
     # public methods
 
@@ -383,7 +383,7 @@ class BrowserModule(Component):
                 except NoSuchChangeset:
                     pass
 
-            context = context.child(repos.resource.child('source', path,
+            context = context.child(repos.resource.child(self.realm, path,
                                                    version=rev_or_latest))
             display_rev = repos.display_rev
 
@@ -540,7 +540,7 @@ class BrowserModule(Component):
                 else:
                     entry = (reponame, repoinfo, None, None, u"\u2013", None)
             if entry[4] is not None:  # Check permission in case of error
-                root = Resource('repository', reponame).child('source', '/')
+                root = Resource('repository', reponame).child(self.realm, '/')
                 if 'BROWSER_VIEW' not in context.perm(root):
                     continue
             repositories.append(entry)
@@ -690,13 +690,12 @@ class BrowserModule(Component):
                 # XSS attacks
                 req.send_header('Content-Disposition', 'attachment')
             req.end_headers()
-
-            def chunks():
-                c = chunk
-                while c:
-                    yield c
-                    c = content.read(CHUNK_SIZE)
-            raise RequestDone(chunks())
+            # Note: don't pass an iterable instance to RequestDone, instead
+            # call req.write() with each chunk here to avoid SEGVs (#11805)
+            while chunk:
+                req.write(chunk)
+                chunk = content.read(CHUNK_SIZE)
+            raise RequestDone
         else:
             # The changeset corresponding to the last change on `node`
             # is more interesting than the `rev` changeset.
@@ -715,8 +714,8 @@ class BrowserModule(Component):
             add_link(req, 'alternate', raw_href, _('Original Format'),
                      mime_type)
 
-            self.log.debug("Rendering preview of node %s@%s with mime-type %s"
-                           % (node.name, str(rev), mime_type))
+            self.log.debug("Rendering preview of node %s@%s with mime-type %s",
+                           node.name, rev, mime_type)
 
             content = None # the remainder of that content is not needed
 

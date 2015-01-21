@@ -42,10 +42,11 @@ from genshi.builder import tag
 
 from trac.config import BoolOption, Option
 from trac.core import Component, implements
+from trac.notification.api import NotificationSystem
 from trac.perm import PermissionCache
 from trac.resource import Resource
 from trac.ticket import Ticket
-from trac.ticket.notification import TicketNotifyEmail
+from trac.ticket.notification import TicketChangeEvent
 from trac.util.datefmt import utc
 from trac.util.text import exception_to_unicode
 from trac.util.translation import _, cleandoc_
@@ -204,15 +205,18 @@ class CommitTicketUpdater(Component):
 
     def make_ticket_comment(self, repos, changeset):
         """Create the ticket comment from the changeset data."""
-        revstring = str(changeset.rev)
+        rev = changeset.rev
+        revstring = str(rev)
+        drev = str(repos.display_rev(rev))
         if repos.reponame:
             revstring += '/' + repos.reponame
+            drev += '/' + repos.reponame
         return """\
-In [changeset:"%s"]:
+In [changeset:"%s" %s]:
 {{{
 #!CommitTicketReference repository="%s" revision="%s"
 %s
-}}}""" % (revstring, repos.reponame, changeset.rev, changeset.message.strip())
+}}}""" % (revstring, drev, repos.reponame, rev, changeset.message.strip())
 
     def _update_tickets(self, tickets, changeset, comment, date):
         """Update the tickets with the given comment."""
@@ -231,18 +235,18 @@ In [changeset:"%s"]:
                     if save:
                         ticket.save_changes(authname, comment, date)
                 if save:
-                    self._notify(ticket, date)
+                    self._notify(ticket, date, changeset.author, comment)
             except Exception as e:
                 self.log.error("Unexpected error while processing ticket "
                                "#%s: %s", tkt_id, exception_to_unicode(e))
 
-    def _notify(self, ticket, date):
+    def _notify(self, ticket, date, author, comment):
         """Send a ticket update notification."""
         if not self.notify:
             return
+        event = TicketChangeEvent('changed', ticket, date, author, comment)
         try:
-            tn = TicketNotifyEmail(self.env)
-            tn.notify(ticket, newticket=False, modtime=date)
+            NotificationSystem(self.env).notify(event)
         except Exception as e:
             self.log.error("Failure sending notification on change to "
                            "ticket #%s: %s", ticket.id,

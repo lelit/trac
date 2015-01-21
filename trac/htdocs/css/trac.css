@@ -109,7 +109,7 @@ input[type=button]:hover, input[type=submit]:hover, input[type=reset]:hover {
  text-shadow: .1em .1em #fcfcfc;
 }
 input[type=button]:active, input[type=submit]:active,
-input[type=reset]:active {
+input[type=reset]:active, .inlinebuttons a:active {
  position: relative;
  top: .1em;
  left: .1em;
@@ -161,7 +161,8 @@ label.disabled, .disabled span.hint, .disabled p.help, .disabled legend,
 .buttons form, .buttons form div { display: inline }
 .buttons input { margin: 1em .5em .1em 0 }
 
-.inlinebuttons input {
+.inlinebuttons input,
+.inlinebuttons a {
  border: 1px solid #ddd;
  border-radius: 1em;
  height: 1.6em;
@@ -174,11 +175,13 @@ label.disabled, .disabled span.hint, .disabled p.help, .disabled legend,
  cursor: pointer;
 }
 .uisymbols .inlinebuttons input[type=button],
-.uisymbols .inlinebuttons input[type=submit] {
+.uisymbols .inlinebuttons input[type=submit],
+.uisymbols .inlinebuttons a {
  font-size: 100%;
 }
 .inlinebuttons input[type=button]:hover,
-.inlinebuttons input[type=submit]:hover {
+.inlinebuttons input[type=submit]:hover,
+.inlinebuttons a:hover {
  background: #f6f6f6;
  color: #333;
  text-shadow: .1em .1em #fcfcfc;
@@ -205,6 +208,8 @@ form.mod { margin: 1em 0 }
 form.mod .field { margin: .5em 0; }
 form.mod .field.description { margin-top: 1em; }
 form.mod .field label { padding-left: .2em }
+form.mod #changeinfo .field { margin: 0.25em 0 0.75em 0 }
+form.mod #changeinfo .options { padding: 0 0 0.5em 1em }
 
 /* Header */
 #header hr { display: none }
@@ -522,6 +527,9 @@ a.trac-diff:after { content: "∆" }
 div.compact > p:first-child { margin-top: 0 }
 div.compact > p:last-child { margin-bottom: 0 }
 
+/* Delete */
+#delete-confirm li { list-style-type: square; }
+
 /* Styles related to RTL support */
 .rtl { direction: rtl; }
 .rtl div.wiki-toc { float: left; }
@@ -637,15 +645,6 @@ div.trac-grip {
  cursor: s-resize;
 }
 
-/* Styles for the form for adding attachments. */
-#attachment .field { margin-top: 1.3em }
-#attachment label { padding-left: .2em }
-#attachment fieldset { margin-top: 2em }
-#attachment fieldset .field { float: left; margin: 0 1em .5em 0 }
-#attachment .options { float: left; padding: 0 0 1em 1em }
-#attachment br { clear: left }
-.attachment #preview { margin-top: 1em }
-
 /* Styles for the list of attachments. */
 #attachments > div.attachments {
  padding: 0 0 1em 1em;
@@ -663,6 +662,8 @@ div.trac-grip {
  margin: .4em 0;
 }
 #attachments span.trac-author { font-style: italic; }
+
+.attachment #preview { margin-top: 1em }
 
 /* Styles for tabular listings such as those used for displaying directory
    contents and report results. */
@@ -723,6 +724,11 @@ table.listing pre { white-space: pre-wrap }
 }
 #fieldhist td.version { text-align: center }
 #fieldhist td.comment { width: 100% }
+#fieldhist .inlinebuttons {
+ display: none;
+ float: right;
+}
+.uisymbols #fieldhist .inlinebuttons a { font-size: 85% }
 
 /* Auto-completion interface */
 .suggestions { background: #fff; border: 1px solid #886; color: #222; }

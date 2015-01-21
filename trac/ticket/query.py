@@ -30,9 +30,9 @@ from trac.db import get_column_names
 from trac.mimeview.api import IContentConverter, Mimeview
 from trac.resource import Resource
 from trac.ticket.api import TicketSystem
-from trac.ticket.model import Milestone, group_milestones
+from trac.ticket.model import Milestone
+from trac.ticket.roadmap import group_milestones
 from trac.util import Ranges, as_bool
-from trac.util.compat import any
 from trac.util.datefmt import from_utimestamp, format_date_or_datetime, \
                               parse_date, to_timestamp, to_utimestamp, utc, \
                               user_time
@@ -46,7 +46,7 @@ from trac.web.chrome import (INavigationContributor, Chrome,
                              add_script_data, add_stylesheet, add_warning,
                              web_context)
 from trac.wiki.api import IWikiSyntaxProvider
-from trac.wiki.macros import WikiMacroBase # TODO: should be moved in .api
+from trac.wiki.macros import WikiMacroBase
 
 
 class QuerySyntaxError(TracError):
@@ -307,7 +307,6 @@ class Query(object):
                     raise TracError(_("Page %(page)s is beyond the number of "
                                       "pages in the query", page=self.page))
 
-            # self.env.log.debug("SQL: " + sql % tuple([repr(a) for a in args]))
             cursor.execute(sql, args)
             columns = get_column_names(cursor)
             fields = [self.fields.by_name(column, None) for column in columns]
@@ -420,7 +419,6 @@ class Query(object):
             tzinfo = req.tz
             locale = req.locale
         self.get_columns()
-        db = self.env.get_read_db()
 
         enum_columns = ('resolution', 'priority', 'severity')
         # Build the list of actual columns to query
@@ -446,216 +444,223 @@ class Query(object):
         sql.append("SELECT " + ",".join(['t.%s AS %s' % (c, c) for c in cols
                                          if c not in custom_fields]))
         sql.append(",priority.value AS priority_value")
-        for k in [db.quote(k) for k in cols if k in custom_fields]:
-            sql.append(",t.%s AS %s" % (k, k))
+        with self.env.db_query as db:
+            for k in [db.quote(k) for k in cols if k in custom_fields]:
+                sql.append(",t.%s AS %s" % (k, k))
 
-        # Use subquery of ticket_custom table as necessary
-        if any(k in custom_fields for k in cols):
-            sql.append('\nFROM (\n  SELECT ' +
-                       ','.join('t.%s AS %s' % (c, c)
-                                for c in cols if c not in custom_fields))
-            sql.extend(",\n  (SELECT c.value FROM ticket_custom c "
-                       "WHERE c.ticket=t.id AND c.name='%s') AS %s"
-                       % (k, db.quote(k))
-                       for k in cols if k in custom_fields)
-            sql.append("\n  FROM ticket AS t) AS t")
-        else:
-            sql.append("\nFROM ticket AS t")
-
-        # Join with the enum table for proper sorting
-        for col in [c for c in enum_columns
-                    if c == self.order or c == self.group or c == 'priority']:
-            sql.append("\n  LEFT OUTER JOIN enum AS %s ON "
-                       "(%s.type='%s' AND %s.name=%s)"
-                       % (col, col, col, col, col))
-
-        # Join with the version/milestone tables for proper sorting
-        for col in [c for c in ['milestone', 'version']
-                    if c == self.order or c == self.group]:
-            sql.append("\n  LEFT OUTER JOIN %s ON (%s.name=%s)"
-                       % (col, col, col))
-
-        def get_timestamp(date):
-            if date:
-                try:
-                    return to_utimestamp(user_time(req, parse_date, date))
-                except TracError as e:
-                    errors.append(unicode(e))
-            return None
-
-        def get_constraint_sql(name, value, mode, neg):
-            if name not in custom_fields:
-                col = 't.' + name
+            # Use subquery of ticket_custom table as necessary
+            if any(k in custom_fields for k in cols):
+                sql.append('\nFROM (\n  SELECT ' +
+                           ','.join('t.%s AS %s' % (c, c)
+                                    for c in cols if c not in custom_fields))
+                sql.extend(",\n  (SELECT c.value FROM ticket_custom c "
+                           "WHERE c.ticket=t.id AND c.name='%s') AS %s"
+                           % (k, db.quote(k))
+                           for k in cols if k in custom_fields)
+                sql.append("\n  FROM ticket AS t) AS t")
             else:
-                col = 't.' + db.quote(name)
-            value = value[len(mode) + neg:]
+                sql.append("\nFROM ticket AS t")
 
-            if name in self.time_fields:
-                if '..' in value:
-                    (start, end) = [each.strip() for each in
-                                    value.split('..', 1)]
+            # Join with the enum table for proper sorting
+            for col in [c for c in enum_columns
+                        if c == self.order or c == self.group
+                           or c == 'priority']:
+                sql.append("\n  LEFT OUTER JOIN enum AS %s ON "
+                           "(%s.type='%s' AND %s.name=%s)"
+                           % (col, col, col, col, col))
+
+            # Join with the version/milestone tables for proper sorting
+            for col in [c for c in ['milestone', 'version']
+                        if c == self.order or c == self.group]:
+                sql.append("\n  LEFT OUTER JOIN %s ON (%s.name=%s)"
+                           % (col, col, col))
+
+            def get_timestamp(date):
+                if date:
+                    try:
+                        return to_utimestamp(user_time(req, parse_date, date))
+                    except TracError as e:
+                        errors.append(unicode(e))
+                return None
+
+            def get_constraint_sql(name, value, mode, neg):
+                if name not in custom_fields:
+                    col = 't.' + name
                 else:
-                    (start, end) = (value.strip(), '')
-                col_cast = db.cast(col, 'int64')
-                start = get_timestamp(start)
-                end = get_timestamp(end)
-                if start is not None and end is not None:
-                    return ("%s(%s>=%%s AND %s<%%s)" % ('NOT ' if neg else '',
-                                                        col_cast, col_cast),
-                            (start, end))
-                elif start is not None:
-                    return ("%s%s>=%%s" % ('NOT ' if neg else '', col_cast),
-                            (start, ))
-                elif end is not None:
-                    return ("%s%s<%%s" % ('NOT ' if neg else '', col_cast),
-                            (end, ))
-                else:
-                    return None
+                    col = 't.' + db.quote(name)
+                value = value[len(mode) + neg:]
 
-            if mode == '~' and name in list_fields:
-                words = value.split()
-                clauses, args = [], []
-                for word in words:
-                    cneg = ''
-                    if word.startswith('-'):
-                        cneg = 'NOT '
-                        word = word[1:]
-                        if not word:
-                            continue
-                    clauses.append("COALESCE(%s,'') %s%s" % (col, cneg,
-                                                             db.like()))
-                    args.append('%' + db.like_escape(word) + '%')
-                if not clauses:
-                    return None
-                return (('NOT ' if neg else '')
-                        + '(' + ' AND '.join(clauses) + ')', args)
+                if name in self.time_fields:
+                    if '..' in value:
+                        (start, end) = [each.strip() for each in
+                                        value.split('..', 1)]
+                    else:
+                        (start, end) = (value.strip(), '')
+                    col_cast = db.cast(col, 'int64')
+                    start = get_timestamp(start)
+                    end = get_timestamp(end)
+                    if start is not None and end is not None:
+                        return ("%s(%s>=%%s AND %s<%%s)"
+                                % ('NOT ' if neg else '', col_cast, col_cast),
+                                (start, end))
+                    elif start is not None:
+                        return ("%s%s>=%%s"
+                                % ('NOT ' if neg else '', col_cast),
+                                (start, ))
+                    elif end is not None:
+                        return ("%s%s<%%s"
+                                % ('NOT ' if neg else '', col_cast),
+                                (end, ))
+                    else:
+                        return None
 
-            if mode == '':
-                return ("COALESCE(%s,'')%s=%%s" % (col, '!' if neg else ''),
+                if mode == '~' and name in list_fields:
+                    words = value.split()
+                    clauses, args = [], []
+                    for word in words:
+                        cneg = ''
+                        if word.startswith('-'):
+                            cneg = 'NOT '
+                            word = word[1:]
+                            if not word:
+                                continue
+                        clauses.append("COALESCE(%s,'') %s%s" % (col, cneg,
+                                                                 db.like()))
+                        args.append('%' + db.like_escape(word) + '%')
+                    if not clauses:
+                        return None
+                    return (('NOT ' if neg else '')
+                            + '(' + ' AND '.join(clauses) + ')', args)
+
+                if mode == '':
+                    return ("COALESCE(%s,'')%s=%%s"
+                            % (col, '!' if neg else ''), (value, ))
+
+                if not value:
+                    return None
+                value = db.like_escape(value)
+                if mode == '~':
+                    value = '%' + value + '%'
+                elif mode == '^':
+                    value = value + '%'
+                elif mode == '$':
+                    value = '%' + value
+                return ("COALESCE(%s,'') %s%s" % (col, 'NOT ' if neg else '',
+                                                  db.like()),
                         (value, ))
 
-            if not value:
-                return None
-            value = db.like_escape(value)
-            if mode == '~':
-                value = '%' + value + '%'
-            elif mode == '^':
-                value = value + '%'
-            elif mode == '$':
-                value = '%' + value
-            return ("COALESCE(%s,'') %s%s" % (col, 'NOT ' if neg else '',
-                                              db.like()),
-                    (value, ))
+            def get_clause_sql(constraints):
+                clauses = []
+                for k, v in constraints.iteritems():
+                    if authname is not None:
+                        v = [val.replace('$USER', authname) for val in v]
+                    # Determine the match mode of the constraint (contains,
+                    # starts-with, negation, etc.)
+                    neg = v[0].startswith('!')
+                    mode = ''
+                    if len(v[0]) > neg and v[0][neg] in ('~', '^', '$'):
+                        mode = v[0][neg]
 
-        def get_clause_sql(constraints):
-            db = self.env.get_read_db()
-            clauses = []
-            for k, v in constraints.iteritems():
-                if authname is not None:
-                    v = [val.replace('$USER', authname) for val in v]
-                # Determine the match mode of the constraint (contains,
-                # starts-with, negation, etc.)
-                neg = v[0].startswith('!')
-                mode = ''
-                if len(v[0]) > neg and v[0][neg] in ('~', '^', '$'):
-                    mode = v[0][neg]
-
-                # Special case id ranges
-                if k == 'id':
-                    ranges = Ranges()
-                    for r in v:
-                        r = r.replace('!', '')
-                        try:
-                            ranges.appendrange(r)
-                        except Exception:
-                            errors.append(_('Invalid ticket id list: '
-                                            '%(value)s', value=r))
-                    ids = []
-                    id_clauses = []
-                    for a, b in ranges.pairs:
-                        if a == b:
-                            ids.append(str(a))
+                    # Special case id ranges
+                    if k == 'id':
+                        ranges = Ranges()
+                        for r in v:
+                            r = r.replace('!', '')
+                            try:
+                                ranges.appendrange(r)
+                            except Exception:
+                                errors.append(_('Invalid ticket id list: '
+                                                '%(value)s', value=r))
+                        ids = []
+                        id_clauses = []
+                        for a, b in ranges.pairs:
+                            if a == b:
+                                ids.append(str(a))
+                            else:
+                                id_clauses.append('t.id BETWEEN %s AND %s')
+                                args.append(a)
+                                args.append(b)
+                        if ids:
+                            id_clauses.append('t.id IN (%s)' % (','.join(ids)))
+                        if id_clauses:
+                            clauses.append('%s(%s)'
+                                           % ('NOT 'if neg else '',
+                                              ' OR '.join(id_clauses)))
+                    # Special case for exact matches on multiple values
+                    elif not mode and len(v) > 1 and k not in self.time_fields:
+                        if k not in custom_fields:
+                            col = 't.' + k
                         else:
-                            id_clauses.append('t.id BETWEEN %s AND %s')
-                            args.append(a)
-                            args.append(b)
-                    if ids:
-                        id_clauses.append('t.id IN (%s)' % (','.join(ids)))
-                    if id_clauses:
-                        clauses.append('%s(%s)' % ('NOT 'if neg else '',
-                                                   ' OR '.join(id_clauses)))
-                # Special case for exact matches on multiple values
-                elif not mode and len(v) > 1 and k not in self.time_fields:
-                    if k not in custom_fields:
-                        col = 't.' + k
-                    else:
-                        col = 't.' + db.quote(k)
-                    clauses.append("COALESCE(%s,'') %sIN (%s)"
-                                   % (col, 'NOT ' if neg else '',
-                                      ','.join(['%s' for val in v])))
-                    args.extend([val[neg:] for val in v])
-                elif v:
-                    constraint_sql = [get_constraint_sql(k, val, mode, neg)
-                                      for val in v]
-                    constraint_sql = filter(None, constraint_sql)
-                    if not constraint_sql:
-                        continue
-                    if neg:
-                        clauses.append("(" + " AND ".join(
-                            [item[0] for item in constraint_sql]) + ")")
-                    else:
-                        clauses.append("(" + " OR ".join(
-                            [item[0] for item in constraint_sql]) + ")")
-                    for item in constraint_sql:
-                        args.extend(item[1])
-            return " AND ".join(clauses)
+                            col = 't.' + db.quote(k)
+                        clauses.append("COALESCE(%s,'') %sIN (%s)"
+                                       % (col, 'NOT ' if neg else '',
+                                          ','.join(['%s' for val in v])))
+                        args.extend([val[neg:] for val in v])
+                    elif v:
+                        constraint_sql = [get_constraint_sql(k, val, mode, neg)
+                                          for val in v]
+                        constraint_sql = filter(None, constraint_sql)
+                        if not constraint_sql:
+                            continue
+                        if neg:
+                            clauses.append("(" + " AND ".join(
+                                [item[0] for item in constraint_sql]) + ")")
+                        else:
+                            clauses.append("(" + " OR ".join(
+                                [item[0] for item in constraint_sql]) + ")")
+                        for item in constraint_sql:
+                            args.extend(item[1])
+                return " AND ".join(clauses)
 
-        args = []
-        errors = []
-        clauses = filter(None, (get_clause_sql(c) for c in self.constraints))
-        if clauses:
-            sql.append("\nWHERE ")
-            sql.append(" OR ".join('(%s)' % c for c in clauses))
-            if cached_ids:
-                sql.append(" OR ")
-                sql.append("id in (%s)" %
-                           (','.join([str(id) for id in cached_ids])))
+            args = []
+            errors = []
+            clauses = filter(None,
+                             (get_clause_sql(c) for c in self.constraints))
+            if clauses:
+                sql.append("\nWHERE ")
+                sql.append(" OR ".join('(%s)' % c for c in clauses))
+                if cached_ids:
+                    sql.append(" OR ")
+                    sql.append("id in (%s)" %
+                               (','.join([str(id) for id in cached_ids])))
 
-        sql.append("\nORDER BY ")
-        order_cols = [(self.order, self.desc)]
-        if self.group and self.group != self.order:
-            order_cols.insert(0, (self.group, self.groupdesc))
+            sql.append("\nORDER BY ")
+            order_cols = [(self.order, self.desc)]
+            if self.group and self.group != self.order:
+                order_cols.insert(0, (self.group, self.groupdesc))
 
-        for name, desc in order_cols:
-            if name in enum_columns:
-                col = name + '.value'
-            elif name in custom_fields:
-                col = 't.' + db.quote(name)
-            else:
-                col = 't.' + name
-            desc = ' DESC' if desc else ''
-            # FIXME: This is a somewhat ugly hack.  Can we also have the
-            #        column type for this?  If it's an integer, we do first
-            #        one, if text, we do 'else'
-            if name == 'id' or name in self.time_fields:
-                sql.append("COALESCE(%s,0)=0%s," % (col, desc))
-            else:
-                sql.append("COALESCE(%s,'')=''%s," % (col, desc))
-            if name in enum_columns:
-                # These values must be compared as ints, not as strings
-                sql.append(db.cast(col, 'int') + desc)
-            elif name == 'milestone':
-                sql.append("COALESCE(milestone.completed,0)=0%s,"
-                           "milestone.completed%s,"
-                           "COALESCE(milestone.due,0)=0%s,milestone.due%s,"
-                           "%s%s" % (desc, desc, desc, desc, col, desc))
-            elif name == 'version':
-                sql.append("COALESCE(version.time,0)=0%s,version.time%s,%s%s"
-                           % (desc, desc, col, desc))
-            else:
-                sql.append("%s%s" % (col, desc))
-            if name == self.group and not name == self.order:
-                sql.append(",")
+            for name, desc in order_cols:
+                if name in enum_columns:
+                    col = name + '.value'
+                elif name in custom_fields:
+                    col = 't.' + db.quote(name)
+                else:
+                    col = 't.' + name
+                desc = ' DESC' if desc else ''
+                # FIXME: This is a somewhat ugly hack.  Can we also have the
+                #        column type for this?  If it's an integer, we do
+                #        first one, if text, we do 'else'
+                if name == 'id' or name in self.time_fields:
+                    sql.append("COALESCE(%s,0)=0%s," % (col, desc))
+                else:
+                    sql.append("COALESCE(%s,'')=''%s," % (col, desc))
+                if name in enum_columns:
+                    # These values must be compared as ints, not as strings
+                    sql.append(db.cast(col, 'int') + desc)
+                elif name == 'milestone':
+                    sql.append("COALESCE(milestone.completed,0)=0%s,"
+                               "milestone.completed%s,"
+                               "COALESCE(milestone.due,0)=0%s,"
+                               "milestone.due%s,%s%s"
+                               % (desc, desc, desc, desc, col, desc))
+                elif name == 'version':
+                    sql.append("COALESCE(version.time,0)=0%s,"
+                               "version.time%s,%s%s"
+                               % (desc, desc, col, desc))
+                else:
+                    sql.append("%s%s" % (col, desc))
+                if name == self.group and not name == self.order:
+                    sql.append(",")
         if self.order != 'id':
             sql.append(",t.id")
 
@@ -817,13 +822,15 @@ class QueryModule(Component):
     implements(IRequestHandler, INavigationContributor, IWikiSyntaxProvider,
                IContentConverter)
 
+    realm = TicketSystem.realm
+
     default_query = Option('query', 'default_query',
         default='status!=closed&owner=$USER',
         doc="""The default query for authenticated users. The query is either
             in [TracQuery#QueryLanguage query language] syntax, or a URL query
             string starting with `?` as used in `query:`
             [TracQuery#UsingTracLinks Trac links].
-            (''since 0.11.2'')""")
+            """)
 
     default_anonymous_query = Option('query', 'default_anonymous_query',
         default='status!=closed&cc~=$USER',
@@ -831,11 +838,12 @@ class QueryModule(Component):
             in [TracQuery#QueryLanguage query language] syntax, or a URL query
             string starting with `?` as used in `query:`
             [TracQuery#UsingTracLinks Trac links].
-            (''since 0.11.2'')""")
+            """)
 
     items_per_page = IntOption('query', 'items_per_page', 100,
         """Number of tickets displayed per page in ticket queries,
-        by default (''since 0.11'')""")
+        by default.
+        """)
 
     # IContentConverter methods
 
@@ -863,9 +871,9 @@ class QueryModule(Component):
 
     def get_navigation_items(self, req):
         from trac.ticket.report import ReportModule
-        if 'TICKET_VIEW' in req.perm('ticket') and \
-                not (self.env.is_component_enabled(ReportModule) and
-                     'REPORT_VIEW' in req.perm('report',
+        if 'TICKET_VIEW' in req.perm(self.realm) and \
+                (not self.env.is_component_enabled(ReportModule) or
+                 'REPORT_VIEW' not in req.perm('report',
                                                ReportModule.REPORT_LIST_ID)):
             yield ('mainnav', 'tickets',
                    tag.a(_('View Tickets'), href=req.href.query()))
@@ -876,8 +884,8 @@ class QueryModule(Component):
         return req.path_info == '/query'
 
     def process_request(self, req):
-        req.perm('ticket').assert_permission('TICKET_VIEW')
-        report_id = req.args.get('report')
+        req.perm(self.realm).assert_permission('TICKET_VIEW')
+        report_id = req.args.getfirst('report')
         if report_id:
             req.perm('report', report_id).assert_permission('REPORT_VIEW')
 
@@ -894,7 +902,7 @@ class QueryModule(Component):
                 qstring = self.default_anonymous_query
                 user = email or name or None
 
-            self.log.debug('QueryModule: Using default query: %s', str(qstring))
+            self.log.debug('QueryModule: Using default query: %s', qstring)
             if qstring.startswith('?'):
                 arg_list = parse_arg_list(qstring)
                 args = arg_list_to_args(arg_list)
@@ -934,8 +942,11 @@ class QueryModule(Component):
         max = args.get('max')
         if max is None and format in ('csv', 'tab'):
             max = 0 # unlimited unless specified explicitly
+        order = args.get('order')
+        if isinstance(order, (list, tuple)):
+            order = order[0] if order else None
         query = Query(self.env, report_id,
-                      constraints, cols, args.get('order'),
+                      constraints, cols, order,
                       'desc' in args, args.get('group'),
                       'groupdesc' in args, 'verbose' in args,
                       rows,
@@ -950,11 +961,11 @@ class QueryModule(Component):
             req.redirect(query.get_href(req.href))
 
         # Add registered converters
-        for conversion in Mimeview(self.env).get_supported_conversions(
-                                             'trac.ticket.Query'):
+        for conversion in Mimeview(self.env) \
+                          .get_supported_conversions('trac.ticket.Query'):
             add_link(req, 'alternate',
-                     query.get_href(req.href, format=conversion[0]),
-                     conversion[1], conversion[4], conversion[0])
+                     query.get_href(req.href, format=conversion.key),
+                     conversion.name, conversion.out_mimetype, conversion.key)
 
         if format:
             filename = 'query' if format != 'rss' else None
@@ -1108,7 +1119,7 @@ class QueryModule(Component):
 
         # Only interact with the batch modify module it it is enabled
         from trac.ticket.batch import BatchModifyModule
-        if 'TICKET_BATCH_MODIFY' in req.perm('ticket') and \
+        if 'TICKET_BATCH_MODIFY' in req.perm(self.realm) and \
                 self.env.is_component_enabled(BatchModifyModule):
             self.env[BatchModifyModule].add_template_data(req, data, tickets)
 
@@ -1145,7 +1156,7 @@ class QueryModule(Component):
         context = web_context(req)
         results = query.execute(req)
         for result in results:
-            ticket = Resource('ticket', result['id'])
+            ticket = Resource(self.realm, result['id'])
             if 'TICKET_VIEW' in req.perm(ticket):
                 values = []
                 for col in cols:
@@ -1265,6 +1276,8 @@ class TicketQueryMacro(WikiMacroBase):
     """)
 
     _comma_splitter = re.compile(r'(?<!\\),')
+
+    realm = TicketSystem.realm
 
     @staticmethod
     def parse_args(content):
@@ -1409,7 +1422,7 @@ class TicketQueryMacro(WikiMacroBase):
         # do it explicitly:
 
         tickets = [t for t in tickets
-                   if 'TICKET_VIEW' in req.perm('ticket', t['id'])]
+                   if 'TICKET_VIEW' in req.perm(self.realm, t['id'])]
 
         if not tickets:
             return tag.span(_("No results"), class_='query_no_results')

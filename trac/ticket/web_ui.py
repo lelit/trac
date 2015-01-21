@@ -27,14 +27,16 @@ from trac.attachment import AttachmentModule
 from trac.config import BoolOption, Option, IntOption
 from trac.core import *
 from trac.mimeview.api import Mimeview, IContentConverter
+from trac.notification.api import NotificationSystem
 from trac.resource import (
     Resource, ResourceNotFound, get_resource_url, render_resource_link,
     get_resource_shortname
 )
 from trac.search import ISearchSource, search_to_sql, shorten_result
 from trac.ticket.api import TicketSystem, ITicketManipulator
-from trac.ticket.model import Milestone, Ticket, group_milestones
-from trac.ticket.notification import TicketNotifyEmail
+from trac.ticket.model import Milestone, Ticket
+from trac.ticket.notification import TicketChangeEvent
+from trac.ticket.roadmap import group_milestones
 from trac.timeline.api import ITimelineEventProvider
 from trac.util import as_bool, as_int, get_reporter_id, lazy
 from trac.util.datefmt import (
@@ -48,13 +50,14 @@ from trac.util.text import (
 from trac.util.presentation import separated
 from trac.util.translation import _, tag_, tagn_, N_, ngettext
 from trac.versioncontrol.diff import get_diff_options, diff_blocks
-from trac.web import IRequestHandler, arg_list_to_args, parse_arg_list
+from trac.web.api import IRequestHandler, arg_list_to_args, parse_arg_list
 from trac.web.chrome import (
     Chrome, INavigationContributor, ITemplateProvider,
     add_ctxtnav, add_link, add_notice, add_script, add_script_data,
-    add_stylesheet, add_warning, auth_link, prevnext_nav, web_context
+    add_stylesheet, add_warning, auth_link, chrome_info_script, prevnext_nav,
+    web_context
 )
-from trac.wiki.formatter import format_to, format_to_html, format_to_oneliner
+from trac.wiki.formatter import format_to, format_to_html
 
 
 class InvalidTicket(TracError):
@@ -69,9 +72,11 @@ class TicketModule(Component):
 
     ticket_manipulators = ExtensionPoint(ITicketManipulator)
 
+    realm = TicketSystem.realm
+
     timeline_details = BoolOption('timeline', 'ticket_show_details', 'false',
         """Enable the display of all ticket changes in the timeline, not only
-        open / close operations. (''since 0.9'')""")
+        open / close operations.""")
 
     timeline_component = BoolOption('timeline', 'ticket_show_component',
                                     'false',
@@ -79,11 +84,10 @@ class TicketModule(Component):
         (''since 1.1.1'')""")
 
     max_description_size = IntOption('ticket', 'max_description_size', 262144,
-        """Maximum allowed description size in characters.
-        (//since 0.11//)""")
+        """Maximum allowed description size in characters.""")
 
     max_comment_size = IntOption('ticket', 'max_comment_size', 262144,
-        """Maximum allowed comment size in characters. (//since 0.11.2//)""")
+        """Maximum allowed comment size in characters.""")
 
     max_summary_size = IntOption('ticket', 'max_summary_size', 262144,
         """Maximum allowed summary size in characters. (//since 1.0.2//)""")
@@ -93,14 +97,14 @@ class TicketModule(Component):
         """Which formatter flavor (e.g. 'html' or 'oneliner') should be
         used when presenting the description for new tickets.
         If 'oneliner', the [timeline] abbreviated_messages option applies.
-        (''since 0.11'')""")
+        """)
 
     preserve_newlines = Option('ticket', 'preserve_newlines', 'default',
         """Whether Wiki formatter should respect the new lines present
         in the Wiki text.
         If set to 'default', this is equivalent to 'yes' for new environments
         but keeps the old behavior for upgraded environments (i.e. 'no').
-        (''since 0.11'')""")
+        """)
 
     ticketlink_query = Option('query', 'ticketlink_query',
         default='?status=!closed',
@@ -109,6 +113,8 @@ class TicketModule(Component):
             string starting with `?` as used in `query:`
             [TracQuery#UsingTracLinks Trac links].
             (''since 0.12'')""")
+
+    ticket_path_re = re.compile(r'/ticket/([0-9]+)$')
 
     def __init__(self):
         self._warn_for_default_attr = set()
@@ -142,9 +148,9 @@ class TicketModule(Component):
     # INavigationContributor methods
 
     def get_active_navigation_item(self, req):
-        if re.match(r'/newticket/?', req.path_info):
-            return 'newticket'
-        return 'tickets'
+        if self.ticket_path_re.match(req.path_info):
+            return 'tickets'
+        return 'newticket'
 
     def get_navigation_items(self, req):
         if 'TICKET_CREATE' in req.perm:
@@ -155,11 +161,11 @@ class TicketModule(Component):
     # IRequestHandler methods
 
     def match_request(self, req):
-        if req.path_info == "/newticket":
-            return True
-        match = re.match(r'/ticket/([0-9]+)$', req.path_info)
+        match = self.ticket_path_re.match(req.path_info)
         if match:
             req.args['id'] = match.group(1)
+            return True
+        if req.path_info == '/newticket':
             return True
 
     def process_request(self, req):
@@ -186,7 +192,7 @@ class TicketModule(Component):
     def get_search_results(self, req, terms, filters):
         if not 'ticket' in filters:
             return
-        ticket_realm = Resource('ticket')
+        ticket_realm = Resource(self.realm)
         with self.env.db_query as db:
             sql, args = search_to_sql(db, ['summary', 'keywords',
                                            'description', 'reporter', 'cc',
@@ -242,7 +248,7 @@ class TicketModule(Component):
                       'closed': ('closedticket', 'closed'),
                       'edit': ('editedticket', 'updated')}
 
-        ticket_realm = Resource('ticket')
+        ticket_realm = Resource(self.realm)
 
         field_labels = TicketSystem(self.env).get_ticket_field_labels()
 
@@ -427,6 +433,34 @@ class TicketModule(Component):
 
     # Internal methods
 
+    def _get_action_controls(self, req, ticket):
+        # action_controls is an ordered list of "renders" tuples, where
+        # renders is a list of (action_key, label, widgets, hints) representing
+        # the user interface for each action
+        action_controls = []
+        sorted_actions = TicketSystem(self.env).get_available_actions(req,
+                                                                      ticket)
+        for action in sorted_actions:
+            first_label = None
+            hints = []
+            widgets = []
+            for controller in self._get_action_controllers(req, ticket,
+                                                           action):
+                label, widget, hint = controller.render_ticket_action_control(
+                    req, ticket, action)
+                if not first_label:
+                    first_label = label
+                widgets.append(widget)
+                hints.append(hint)
+            action_controls.append((action, first_label, tag(widgets), hints))
+
+        # The default action is the first in the action_controls list.
+        selected_action = req.args.get('action')
+        if not selected_action and action_controls:
+            selected_action = action_controls[0][0]
+
+        return action_controls, selected_action
+
     def _get_action_controllers(self, req, ticket, action):
         """Generator yielding the controllers handling the given `action`"""
         for controller in TicketSystem(self.env).action_controllers:
@@ -436,7 +470,7 @@ class TicketModule(Component):
                 yield controller
 
     def _process_newticket_request(self, req):
-        req.perm.require('TICKET_CREATE')
+        req.perm(self.realm).require('TICKET_CREATE')
         ticket = Ticket(self.env)
 
         plain_fields = True # support for /newticket?version=0.11 GETs
@@ -445,26 +479,52 @@ class TicketModule(Component):
         if req.method == 'POST':
             plain_fields = False
             field_reporter = 'field_reporter'
-            if 'field_owner' in req.args and 'TICKET_MODIFY' not in req.perm:
-                del req.args['field_owner']
 
         self._populate(req, ticket, plain_fields)
-        ticket.values['status'] = 'new'     # Force initial status
+
         reporter_id = req.args.get(field_reporter) or \
                       get_reporter_id(req, 'author')
         ticket.values['reporter'] = reporter_id
 
-        valid = None
-        if req.method == 'POST' and not 'preview' in req.args:
-            valid = self._validate_ticket(req, ticket)
-            if valid:
-                self._do_create(req, ticket) # (redirected if successful)
-            # else fall through in a preview
-            req.args['preview'] = True
+        preview = 'preview' in req.args
+        if preview or req.method == 'POST':
+            action = req.args.get('action')
+            valid = True
+            # Do any action on the ticket?
+            actions = \
+                TicketSystem(self.env).get_available_actions(req, ticket)
+            if action not in actions:
+                valid = False
+                add_warning(req, _('The action "%(name)s" is not available.',
+                                   name=action))
 
-        # don't validate for new tickets and don't validate twice
-        if valid is None and 'preview' in req.args:
-            valid = self._validate_ticket(req, ticket)
+            field_changes, problems = self.get_ticket_changes(req, ticket,
+                                                              action)
+            if problems:
+                valid = False
+                for problem in problems:
+                    add_warning(req, problem)
+                add_warning(req,
+                            tag_("Please review your configuration, "
+                                 "probably starting with %(section)s "
+                                 "in your %(tracini)s.",
+                                 section=tag.pre('[ticket]', tag.br(),
+                                                 'workflow = ...'),
+                                 tracini=tag.code('trac.ini')))
+
+            # Apply changes made by the workflow
+            self._apply_ticket_changes(ticket, field_changes)
+
+            valid = valid and self._validate_ticket(req, ticket)
+            if not preview and req.method == 'POST':
+                if valid:
+                    # redirects on success
+                    self._do_create(req, ticket, action)
+                # else fall through in a preview
+                req.args['preview'] = True
+
+        action_controls, selected_action = \
+            self._get_action_controls(req, ticket)
 
         # Preview a new ticket
         data = self._prepare_data(req, ticket)
@@ -473,25 +533,11 @@ class TicketModule(Component):
             'actions': [],
             'version': None,
             'description_change': None,
-            'valid': valid
+            'action_controls': action_controls,
+            'action': selected_action,
         })
 
         fields = self._prepare_fields(req, ticket)
-
-        # position 'owner' immediately before 'cc',
-        # if not already positioned after (?)
-
-        field_names = [field['name'] for field in ticket.fields
-                       if not field.get('custom')]
-        if 'owner' in field_names:
-            curr_idx = field_names.index('owner')
-            if 'cc' in field_names:
-                insert_idx = field_names.index('cc')
-            else:
-                insert_idx = len(field_names)
-            if curr_idx < insert_idx:
-                ticket.fields.insert(insert_idx, ticket.fields[curr_idx])
-                del ticket.fields[curr_idx]
 
         data['fields'] = fields
         data['fields_map'] = dict((field['name'], i)
@@ -499,13 +545,15 @@ class TicketModule(Component):
 
         if req.get_header('X-Requested-With') == 'XMLHttpRequest':
             data['preview_mode'] = True
+            data['chrome_info_script'] = chrome_info_script
             return 'ticket_box.html', data, None
 
         add_stylesheet(req, 'common/css/ticket.css')
         add_script(req, 'common/js/folding.js')
-        Chrome(self.env).add_wiki_toolbars(req)
-        Chrome(self.env).add_auto_preview(req)
-        Chrome(self.env).add_jquery_ui(req)
+        chrome = Chrome(self.env)
+        chrome.add_wiki_toolbars(req)
+        chrome.add_auto_preview(req)
+        chrome.add_jquery_ui(req)
         return 'ticket.html', data, None
 
     def _process_ticket_request(self, req):
@@ -514,14 +562,15 @@ class TicketModule(Component):
         xhr = req.get_header('X-Requested-With') == 'XMLHttpRequest'
 
         if xhr and 'preview_comment' in req.args:
-            context = web_context(req, 'ticket', id, version)
+            context = web_context(req, self.realm, id, version)
             escape_newlines = self.must_preserve_newlines
             rendered = format_to_html(self.env, context,
                                       req.args.get('edited_comment', ''),
-                                      escape_newlines=escape_newlines)
+                                      escape_newlines=escape_newlines) + \
+                       chrome_info_script(req)
             req.send(rendered.encode('utf-8'))
 
-        req.perm('ticket', id, version).require('TICKET_VIEW')
+        req.perm(self.realm, id, version).require('TICKET_VIEW')
         ticket = Ticket(self.env, id, version=version)
         action = req.args.get('action', ('history' in req.args and 'history' or
                                          'view'))
@@ -619,8 +668,7 @@ class TicketModule(Component):
                 'reassign_owner': (req.args.get('reassign_choice')
                                    or req.authname),
                 'resolve_resolution': req.args.get('resolve_choice'),
-                'valid': valid
-                })
+            })
         else: # simply 'View'ing the ticket
             field_changes = {}
             data.update({'action': None,
@@ -640,6 +688,7 @@ class TicketModule(Component):
 
         if xhr:
             data['preview_mode'] = bool(data['change_preview']['fields'])
+            data['chrome_info_script'] = chrome_info_script
             return 'ticket_preview.html', data, None
 
         mime = Mimeview(self.env)
@@ -694,19 +743,20 @@ class TicketModule(Component):
         add_script_data(req, {'comments_prefs': self._get_prefs(req)})
         add_stylesheet(req, 'common/css/ticket.css')
         add_script(req, 'common/js/folding.js')
-        Chrome(self.env).add_wiki_toolbars(req)
-        Chrome(self.env).add_auto_preview(req)
-        Chrome(self.env).add_jquery_ui(req)
+        chrome = Chrome(self.env)
+        chrome.add_wiki_toolbars(req)
+        chrome.add_auto_preview(req)
+        chrome.add_jquery_ui(req)
 
         # Add registered converters
         for conversion in mime.get_supported_conversions('trac.ticket.Ticket'):
-            format = conversion[0]
+            format = conversion.key
             conversion_href = get_resource_url(self.env, ticket.resource,
                                                req.href, format=format)
             if format == 'rss':
                 conversion_href = auth_link(req, conversion_href)
-            add_link(req, 'alternate', conversion_href, conversion[1],
-                     conversion[4], format)
+            add_link(req, 'alternate', conversion_href, conversion.name,
+                     conversion.out_mimetype, format)
 
         prevnext_nav(req, _("Previous Ticket"), _("Next Ticket"),
                      _("Back to Query"))
@@ -752,7 +802,7 @@ class TicketModule(Component):
                 remove.append(entry)
             else:
                 add.append(entry)
-        action = entry = ''
+        action = entry = None
         if remove:
             action, entry = ('remove', remove[0])
         elif add:
@@ -1321,13 +1371,23 @@ class TicketModule(Component):
                     add_warning(req, message)
         return valid
 
-    def _do_create(self, req, ticket):
+    def _do_create(self, req, ticket, action):
+        # Save the action controllers we need to call side-effects for before
+        # we save the changes to the ticket.
+        controllers = list(self._get_action_controllers(req, ticket, action))
+
         ticket.insert()
 
+        # After saving the changes, apply the side-effects.
+        for controller in controllers:
+            self.log.debug("Side effect for %s",
+                           controller.__class__.__name__)
+            controller.apply_action_side_effects(req, ticket, action)
+
         # Notify
+        event = TicketChangeEvent('created', ticket, None, ticket['reporter'])
         try:
-            tn = TicketNotifyEmail(self.env)
-            tn.notify(ticket, newticket=True)
+            NotificationSystem(self.env).notify(event)
         except Exception as e:
             self.log.error("Failure sending notification on creation of "
                     "ticket #%s: %s", ticket.id, exception_to_unicode(e))
@@ -1341,9 +1401,9 @@ class TicketModule(Component):
             add_notice(req, tag_("The ticket %(ticketref)s has been created. "
                                  "You can now attach the desired files.",
                                  ticketref=ticketref))
-            req.redirect(req.href.attachment('ticket', ticket.id,
+            req.redirect(req.href.attachment(ticket.realm, ticket.id,
                                              action='new'))
-        if 'TICKET_VIEW' not in req.perm('ticket', ticket.id):
+        if 'TICKET_VIEW' not in req.perm(ticket.resource):
             add_notice(req, tag_("The ticket %(ticketref)s has been created, "
                                  "but you don't have permission to view it.",
                                  ticketref=ticketref))
@@ -1359,14 +1419,15 @@ class TicketModule(Component):
 
         fragment = ''
         now = datetime.now(utc)
-        cnum = ticket.save_changes(get_reporter_id(req, 'author'),
-                                   req.args.get('comment'), when=now,
+        author = get_reporter_id(req, 'author')
+        comment = req.args.get('comment')
+        cnum = ticket.save_changes(author, comment, when=now,
                                    replyto=req.args.get('replyto'))
         if cnum:
             fragment = '#comment:%d' % cnum
+            event = TicketChangeEvent('changed', ticket, now, author, comment)
             try:
-                tn = TicketNotifyEmail(self.env)
-                tn.notify(ticket, newticket=False, modtime=now)
+                NotificationSystem(self.env).notify(event)
             except Exception as e:
                 self.log.error("Failure sending notification on change to "
                         "ticket #%s: %s", ticket.id, exception_to_unicode(e))
@@ -1382,7 +1443,7 @@ class TicketModule(Component):
 
         # After saving the changes, apply the side-effects.
         for controller in controllers:
-            self.log.debug("Side effect for %s" %
+            self.log.debug("Side effect for %s",
                            controller.__class__.__name__)
             controller.apply_action_side_effects(req, ticket, action)
 
@@ -1418,9 +1479,11 @@ class TicketModule(Component):
                     last_new = field_changes[key]['new']
                     last_by = field_changes[key]['by']
                     if last_new != new and last_by:
-                        problems.append('%s changed "%s" to "%s", '
-                                        'but %s changed it to "%s".' %
-                                        (cname, key, new, last_by, last_new))
+                        problems.append(
+                            _('%(controller1)s changed "%(key)s" to '
+                              '"%(val1)s", but %(controller2)s changed '
+                              'it to "%(val2)s".', controller1=cname, key=key,
+                              val1=new, controller2=last_by, val2=last_new))
                 store_change(key, old, new, cname)
 
         # Detect non-changes
@@ -1473,33 +1536,30 @@ class TicketModule(Component):
     def _prepare_fields(self, req, ticket, field_changes=None):
         context = web_context(req, ticket.resource)
         fields = []
-        owner_field = None
         for field in ticket.fields:
             name = field['name']
             type_ = field['type']
+
+            # ensure sane defaults
+            field.setdefault('optional', False)
+            field.setdefault('options', [])
+            field.setdefault('skip', False)
+            field.setdefault('editable', True)
 
             # enable a link to custom query for all choice fields
             if type_ not in ['text', 'textarea', 'time']:
                 field['rendered'] = self._query_link(req, name, ticket[name])
 
             # per field settings
-            if name in ('summary', 'reporter', 'description', 'status',
-                        'resolution', 'time', 'changetime'):
+            if name in ('summary', 'reporter', 'description', 'owner',
+                        'status', 'resolution', 'time', 'changetime'):
                 field['skip'] = True
-            elif name == 'owner':
-                TicketSystem(self.env).eventually_restrict_owner(field, ticket)
-                type_ = field['type']
-                field['skip'] = True
-                if not ticket.exists:
-                    field['label'] = _("Owner")
-                    if 'TICKET_MODIFY' in req.perm(ticket.resource):
-                        field['skip'] = False
-                        owner_field = field
             elif name == 'milestone':
                 milestones = [Milestone(self.env, opt)
                               for opt in field['options']]
                 milestones = [m for m in milestones
                               if 'MILESTONE_VIEW' in req.perm(m.resource)]
+                field['editable'] = milestones != []
                 groups = group_milestones(milestones, ticket.exists
                     and 'TICKET_ADMIN' in req.perm(ticket.resource))
                 field['options'] = []
@@ -1520,9 +1580,10 @@ class TicketModule(Component):
                     field['edit_label'] = {
                             'add': _("Add to Cc"),
                             'remove': _("Remove from Cc"),
-                            '': _("Add/Remove from Cc")}[cc_action]
-                    field['cc_entry'] = cc_entry or _("<Author field>")
-                    field['cc_update'] = cc_update or None
+                            None: _("Cc")}[cc_action]
+                    field['cc_action'] = cc_action
+                    field['cc_entry'] = cc_entry
+                    field['cc_update'] = cc_update
                     if cc_changed:
                         field_changes['cc']['cc_update'] = cc_update
                 if cc_changed:
@@ -1538,7 +1599,7 @@ class TicketModule(Component):
 
             # per type settings
             if type_ in ('radio', 'select'):
-                if ticket.exists:
+                if ticket.exists and field['editable']:
                     value = ticket.values.get(name)
                     options = field['options']
                     optgroups = []
@@ -1556,20 +1617,12 @@ class TicketModule(Component):
                     field['rendered'] = self._query_link(req, name, value,
                                 _("yes") if value == '1' else _("no"))
             elif type_ == 'text':
-                if field.get('format') == 'wiki':
-                    field['rendered'] = format_to_oneliner(self.env, context,
-                                                           ticket[name])
-                elif field.get('format') == 'reference':
+                if field.get('format') == 'reference':
                     field['rendered'] = self._query_link(req, name,
                                                          ticket[name])
                 elif field.get('format') == 'list':
                     field['rendered'] = self._query_link_words(context, name,
                                                                ticket[name])
-            elif type_ == 'textarea':
-                if field.get('format') == 'wiki':
-                    field['rendered'] = \
-                        format_to_html(self.env, context, ticket[name],
-                                escape_newlines=self.must_preserve_newlines)
             elif type_ == 'time':
                 value = ticket[name]
                 field['timevalue'] = value
@@ -1585,16 +1638,8 @@ class TicketModule(Component):
                 else:
                     field['format_hint'] = get_datetime_format_hint(locale)
 
-            # ensure sane defaults
-            field.setdefault('optional', False)
-            field.setdefault('options', [])
-            field.setdefault('skip', False)
             fields.append(field)
 
-        # Move owner field to end when shown
-        if owner_field is not None:
-            fields.remove(owner_field)
-            fields.append(owner_field)
         return fields
 
     def _insert_ticket_data(self, req, ticket, data, author_id, field_changes):
@@ -1664,10 +1709,6 @@ class TicketModule(Component):
         if ticket.resource.version is not None:
             ticket.values.update(values)
 
-        # -- Workflow support
-
-        selected_action = req.args.get('action')
-
         # retrieve close time from changes
         closetime = None
         for c in changes:
@@ -1675,30 +1716,9 @@ class TicketModule(Component):
             if s:
                 closetime = c['date'] if s['new'] == 'closed' else None
 
-        # action_controls is an ordered list of "renders" tuples, where
-        # renders is a list of (action_key, label, widgets, hints) representing
-        # the user interface for each action
-        action_controls = []
-        sorted_actions = TicketSystem(self.env).get_available_actions(req,
-                                                                      ticket)
-        for action in sorted_actions:
-            first_label = None
-            hints = []
-            widgets = []
-            for controller in self._get_action_controllers(req, ticket,
-                                                           action):
-                label, widget, hint = controller.render_ticket_action_control(
-                    req, ticket, action)
-                if not first_label:
-                    first_label = label
-                widgets.append(widget)
-                hints.append(hint)
-            action_controls.append((action, first_label, tag(widgets), hints))
-
-        # The default action is the first in the action_controls list.
-        if not selected_action:
-            if action_controls:
-                selected_action = action_controls[0][0]
+        # Workflow support
+        action_controls, selected_action = \
+            self._get_action_controls(req, ticket)
 
         # Insert change preview
         change_preview = {

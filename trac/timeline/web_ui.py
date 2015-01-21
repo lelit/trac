@@ -51,11 +51,12 @@ class TimelineModule(Component):
 
     default_daysback = IntOption('timeline', 'default_daysback', 30,
         """Default number of days displayed in the Timeline, in days.
-        (''since 0.9'')""")
+        """)
 
     max_daysback = IntOption('timeline', 'max_daysback', 90,
         """Maximum number of days (-1 for unlimited) displayable in the
-        Timeline. (''since 0.11'')""")
+        Timeline.
+        """)
 
     abbreviated_messages = BoolOption('timeline', 'abbreviated_messages',
                                       True,
@@ -63,7 +64,7 @@ class TimelineModule(Component):
 
         This only affects the default rendering, and can be overriden by
         specific event providers, see their own documentation.
-        (''since 0.11'')""")
+        """)
 
     _authors_pattern = re.compile(r'(-)?(?:"([^"]*)"|\'([^\']*)\'|([^\s]+))')
 
@@ -164,17 +165,16 @@ class TimelineModule(Component):
 
         # save the results of submitting the timeline form to the session
         if 'update' in req.args:
-            for filter in available_filters:
-                key = 'timeline.filter.%s' % filter[0]
-                if filter[0] in req.args:
+            for filter_ in available_filters:
+                key = 'timeline.filter.%s' % filter_[0]
+                if filter_[0] in req.args:
                     req.session[key] = '1'
                 elif key in req.session:
                     del req.session[key]
 
         stop = fromdate
-        start = to_datetime(stop.replace(tzinfo=None) - \
-                                timedelta(days=daysback + 1),
-                            req.tz)
+        start = to_datetime(stop.replace(tzinfo=None) -
+                            timedelta(days=daysback + 1), req.tz)
 
         # create author include and exclude sets
         include = set()
@@ -192,10 +192,9 @@ class TimelineModule(Component):
             try:
                 for event in provider.get_timeline_events(req, start, stop,
                                                           filters) or []:
-                    # Check for 0.10 events
-                    author = (event[2 if len(event) < 6 else 4] or '').lower()
+                    author = (event[2] or '').lower()
                     if (not include or author in include) \
-                       and not author in exclude:
+                            and author not in exclude:
                         events.append(self._event_data(provider, event))
             except Exception as e:  # cope with a failure of that provider
                 self._provider_failure(e, req, provider, filters,
@@ -241,23 +240,23 @@ class TimelineModule(Component):
 
         # Navigation to the previous/next period of 'daysback' days
         previous_start = fromdate.replace(tzinfo=None) - \
-                            timedelta(days=daysback + 1)
+                         timedelta(days=daysback + 1)
         previous_start = format_date(to_datetime(previous_start, req.tz),
                                      format='%Y-%m-%d', tzinfo=req.tz)
         add_link(req, 'prev', req.href.timeline(from_=previous_start,
                                                 authors=authors,
                                                 daysback=daysback),
-                 _('Previous Period'))
+                 _("Previous Period"))
         if today - fromdate > timedelta(days=0):
             next_start = fromdate.replace(tzinfo=None) + \
-                            timedelta(days=daysback + 1)
+                         timedelta(days=daysback + 1)
             next_start = format_date(to_datetime(next_start, req.tz),
                                      format='%Y-%m-%d', tzinfo=req.tz)
             add_link(req, 'next', req.href.timeline(from_=next_start,
                                                     authors=authors,
                                                     daysback=daysback),
-                     _('Next Period'))
-        prevnext_nav(req, _('Previous Period'), _('Next Period'))
+                     _("Next Period"))
+        prevnext_nav(req, _("Previous Period"), _("Next Period"))
 
         return 'timeline.html', data, None
 
@@ -350,7 +349,7 @@ class TimelineModule(Component):
             except TracError as e:
                 return tag.a(label, title=to_unicode(e),
                              class_='timeline missing')
-        yield ('timeline', link_resolver)
+        yield 'timeline', link_resolver
 
     # Public methods
 
@@ -368,19 +367,12 @@ class TimelineModule(Component):
     def _event_data(self, provider, event):
         """Compose the timeline event date from the event tuple and prepared
         provider methods"""
-        if len(event) == 6:  # 0.10 events
-            kind, url, title, date, author, markup = event
-            data = {'url': url, 'title': title, 'description': markup}
-            render = lambda field, context: data.get(field)
-        else:  # 0.11 events
-            if len(event) == 5:  # with special provider
-                kind, date, author, data, provider = event
-            else:
-                kind, date, author, data = event
-            render = lambda field, context: \
-                     provider.render_timeline_event(context, field, event)
-        if not isinstance(date, datetime):
-            date = datetime.fromtimestamp(date, utc)
+        if len(event) == 5:  # with special provider
+            kind, date, author, data, provider = event
+        else:
+            kind, date, author, data = event
+        render = lambda field, context: \
+                 provider.render_timeline_event(context, field, event)
         dateuid = to_utimestamp(date)
         return {'kind': kind, 'author': author, 'date': date,
                 'dateuid': dateuid, 'render': render, 'event': event,
@@ -392,7 +384,7 @@ class TimelineModule(Component):
         At the same time, the message will contain a link to the timeline
         without the filters corresponding to the guilty event provider `ep`.
         """
-        self.log.error('Timeline event provider failed: %s',
+        self.log.error("Timeline event provider failed: %s",
                        exception_to_unicode(exc, traceback=True))
 
         ep_kinds = dict((f[0], f[1])
@@ -402,8 +394,8 @@ class TimelineModule(Component):
         other_filters = set(current_filters) - ep_filters
         if not other_filters:
             other_filters = set(all_filters) - ep_filters
-        args = [(a, req.args.get(a)) for a in ('from', 'format', 'max',
-                                               'daysback')]
+        args = [(a, req.args.get(a))
+                for a in ('from', 'format', 'max', 'daysback')]
         href = req.href.timeline(args + [(f, 'on') for f in other_filters])
         # TRANSLATOR: ...want to see the 'other kinds of events' from... (link)
         other_events = tag.a(_('other kinds of events'), href=href)

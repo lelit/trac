@@ -39,7 +39,11 @@ class IWikiChangeListener(Interface):
         """Called whenever a new Wiki page is added."""
 
     def wiki_page_changed(page, version, t, comment, author, ipnr):
-        """Called when a page has been modified."""
+        """Called when a page has been modified.
+
+        :since 1.0.3: `ipnr` is optional and deprecated, and will
+                      be removed in 1.3.1
+        """
 
     def wiki_page_deleted(page):
         """Called when a page has been deleted."""
@@ -49,6 +53,9 @@ class IWikiChangeListener(Interface):
 
     def wiki_page_renamed(page, old_name):
         """Called when a page has been renamed."""
+
+    def wiki_page_comment_modified(page, old_comment):
+        """Called when a page comment has been modified."""
 
 
 class IWikiPageManipulator(Interface):
@@ -253,13 +260,15 @@ class WikiSystem(Component):
     macro_providers = ExtensionPoint(IWikiMacroProvider)
     syntax_providers = ExtensionPoint(IWikiSyntaxProvider)
 
+    realm = 'wiki'
+
     ignore_missing_pages = BoolOption('wiki', 'ignore_missing_pages', 'false',
         """Enable/disable highlighting CamelCase links to missing pages.
-        (''since 0.9'')""")
+        """)
 
     split_page_names = BoolOption('wiki', 'split_page_names', 'false',
         """Enable/disable splitting the WikiPageNames with space characters.
-        (''since 0.10'')""")
+        """)
 
     render_unsafe_content = BoolOption('wiki', 'render_unsafe_content', 'false',
         """Enable/disable the use of unsafe HTML tags such as `<script>` or
@@ -267,15 +276,14 @@ class WikiSystem(Component):
 
         For public sites where anonymous users can edit the wiki it is
         recommended to leave this option disabled.
-
-        (''since 0.10.4'')""")
+        """)
 
     safe_schemes = ListOption('wiki', 'safe_schemes',
         'cvs, file, ftp, git, irc, http, https, news, sftp, smb, ssh, svn, '
         'svn+ssh',
         doc="""List of URI schemes considered "safe", that will be rendered as
         external links even if `[wiki] render_unsafe_content` is `false`.
-        (''since 0.11.8'')""")
+        """)
 
     @cached
     def pages(self):
@@ -402,7 +410,7 @@ class WikiSystem(Component):
             query = '&' + query[1:]
         pagename = pagename.rstrip('/') or 'WikiStart'
         referrer = ''
-        if formatter.resource and formatter.resource.realm == 'wiki':
+        if formatter.resource and formatter.resource.realm == self.realm:
             referrer = formatter.resource.id
         if pagename.startswith('/'):
             pagename = pagename.lstrip('/')
@@ -411,7 +419,7 @@ class WikiSystem(Component):
         else:
             pagename = self._resolve_scoped_name(pagename, referrer)
         label = unquote_label(label)
-        if 'WIKI_VIEW' in formatter.perm('wiki', pagename, version):
+        if 'WIKI_VIEW' in formatter.perm(self.realm, pagename, version):
             href = formatter.href.wiki(pagename, version=version) + query \
                    + fragment
             if self.has_page(pagename):
@@ -419,7 +427,8 @@ class WikiSystem(Component):
             else:
                 if ignore_missing:
                     return original_label or label
-                if 'WIKI_CREATE' in formatter.perm('wiki', pagename, version):
+                if 'WIKI_CREATE' in \
+                        formatter.perm(self.realm, pagename, version):
                     return tag.a(label + '?', class_='missing wiki',
                                  href=href, rel='nofollow')
                 else:
@@ -469,7 +478,7 @@ class WikiSystem(Component):
     # IResourceManager methods
 
     def get_resource_realms(self):
-        yield 'wiki'
+        yield self.realm
 
     def get_resource_description(self, resource, format, **kwargs):
         """

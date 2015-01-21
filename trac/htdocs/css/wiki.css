@@ -30,6 +30,9 @@
 #pagepath .sep { color: #666; padding: 0 .1em }
 #pagepath .pathentry { float: left }
 
+/* Styles for the page creation form */
+.create #modifypage input { margin: 2px /* trac.css' input {} */ }
+
 /* Styles for the page editing form */
 .preview-right {
  float: right;
@@ -58,19 +61,12 @@
 #edit div.trac-resizable { clear: both }
 #edit + #info { margin-top: 1em }
 #edit + #attachments { margin-top: 1.5em }
-#changeinfo { padding: .5em }
-#changeinfo .field { float: left; margin: 0 1em .5em 0 }
-#changeinfo { clear: both }
-#changeinfo br { clear: left }
-#changeinfo .options { padding: 0 0 1em 1em }
-#changeinfo .options, #changeinfo .buttons { clear: left }
 #delete, #rename, #save { margin-left: 3em }
 #preview {
  background: #f8f8f8 url(../draft.png);
  margin: 1em 0 2em;
  overflow: auto;
 }
-#template { vertical-align: middle; padding-top: 1em; }
 
 /* Diff view */
 #overview .multi { color: #999 }

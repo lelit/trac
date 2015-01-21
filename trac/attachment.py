@@ -41,7 +41,7 @@ from trac.util.compat import sha1
 from trac.util.datefmt import format_datetime, from_utimestamp, \
                               to_datetime, to_utimestamp, utc
 from trac.util.text import exception_to_unicode, path_to_unicode, \
-                           pretty_size, print_table, unicode_unquote
+                           pretty_size, print_table, stripws, unicode_unquote
 from trac.util.translation import _, tag_
 from trac.web import HTTPBadRequest, IRequestHandler, RequestDone
 from trac.web.chrome import (INavigationContributor, add_ctxtnav, add_link,
@@ -116,303 +116,12 @@ class ILegacyAttachmentPolicyDelegate(Interface):
             """
 
 
-class Attachment(object):
-
-    realm = 'attachment'
-
-    def __init__(self, env, parent_realm_or_attachment_resource,
-                 parent_id=None, filename=None):
-        if isinstance(parent_realm_or_attachment_resource, Resource):
-            self.resource = parent_realm_or_attachment_resource
-        else:
-            self.resource = Resource(parent_realm_or_attachment_resource,
-                                     parent_id).child(self.realm, filename)
-        self.env = env
-        self.parent_realm = self.resource.parent.realm
-        self.parent_id = unicode(self.resource.parent.id)
-        if self.resource.id:
-            self._fetch(self.resource.id)
-        else:
-            self.filename = None
-            self.description = None
-            self.size = None
-            self.date = None
-            self.author = None
-            self.ipnr = None
-
-    def _set_filename(self, val):
-        self.resource.id = val
-
-    filename = property(lambda self: self.resource.id, _set_filename)
-
-    def _from_database(self, filename, description, size, time, author, ipnr):
-        self.filename = filename
-        self.description = description
-        self.size = int(size) if size else 0
-        self.date = from_utimestamp(time or 0)
-        self.author = author
-        self.ipnr = ipnr
-
-    def _fetch(self, filename):
-        for row in self.env.db_query("""
-                SELECT filename, description, size, time, author, ipnr
-                FROM attachment WHERE type=%s AND id=%s AND filename=%s
-                ORDER BY time
-                """, (self.parent_realm, unicode(self.parent_id), filename)):
-            self._from_database(*row)
-            break
-        else:
-            self.filename = filename
-            raise ResourceNotFound(_("Attachment '%(title)s' does not exist.",
-                                     title=self.title),
-                                   _('Invalid Attachment'))
-
-    # _get_path() and _get_hashed_filename() are class methods so that they
-    # can be used in db28.py.
-
-    @classmethod
-    def _get_path(cls, env_path, parent_realm, parent_id, filename):
-        """Get the path of an attachment.
-
-        WARNING: This method is used by db28.py for moving attachments from
-        the old "attachments" directory to the "files" directory. Please check
-        all changes so that they don't break the upgrade.
-        """
-        path = os.path.join(env_path, 'files', 'attachments',
-                            parent_realm)
-        hash = sha1(parent_id.encode('utf-8')).hexdigest()
-        path = os.path.join(path, hash[0:3], hash)
-        if filename:
-            path = os.path.join(path, cls._get_hashed_filename(filename))
-        return os.path.normpath(path)
-
-    _extension_re = re.compile(r'\.[A-Za-z0-9]+\Z')
-
-    @classmethod
-    def _get_hashed_filename(cls, filename):
-        """Get the hashed filename corresponding to the given filename.
-
-        WARNING: This method is used by db28.py for moving attachments from
-        the old "attachments" directory to the "files" directory. Please check
-        all changes so that they don't break the upgrade.
-        """
-        hash = sha1(filename.encode('utf-8')).hexdigest()
-        match = cls._extension_re.search(filename)
-        return hash + match.group(0) if match else hash
-
-    @property
-    def path(self):
-        return self._get_path(self.env.path, self.parent_realm, self.parent_id,
-                              self.filename)
-
-    @property
-    def title(self):
-        return '%s:%s: %s' % (self.parent_realm, self.parent_id, self.filename)
-
-    def delete(self):
-        """Delete the attachment, both the record in the database and
-        the file itself.
-        """
-        assert self.filename, "Cannot delete non-existent attachment"
-
-        with self.env.db_transaction as db:
-            db("""
-                DELETE FROM attachment WHERE type=%s AND id=%s AND filename=%s
-                """, (self.parent_realm, self.parent_id, self.filename))
-            path = self.path
-            if os.path.isfile(path):
-                try:
-                    os.unlink(path)
-                except OSError as e:
-                    self.env.log.error("Failed to delete attachment "
-                                       "file %s: %s",
-                                       path,
-                                       exception_to_unicode(e, traceback=True))
-                    raise TracError(_("Could not delete attachment"))
-
-        self.env.log.info("Attachment removed: %s" % self.title)
-
-        for listener in AttachmentModule(self.env).change_listeners:
-            listener.attachment_deleted(self)
-
-    def reparent(self, new_realm, new_id):
-        assert self.filename, "Cannot reparent non-existent attachment"
-        new_id = unicode(new_id)
-        new_path = self._get_path(self.env.path, new_realm, new_id,
-                                  self.filename)
-
-        # Make sure the path to the attachment is inside the environment
-        # attachments directory
-        attachments_dir = os.path.join(os.path.normpath(self.env.path),
-                                       'files', 'attachments')
-        commonprefix = os.path.commonprefix([attachments_dir, new_path])
-        if commonprefix != attachments_dir:
-            raise TracError(_('Cannot reparent attachment "%(att)s" as '
-                              '%(realm)s:%(id)s is invalid',
-                              att=self.filename, realm=new_realm, id=new_id))
-
-        if os.path.exists(new_path):
-            raise TracError(_('Cannot reparent attachment "%(att)s" as '
-                              'it already exists in %(realm)s:%(id)s',
-                              att=self.filename, realm=new_realm, id=new_id))
-        with self.env.db_transaction as db:
-            db("""UPDATE attachment SET type=%s, id=%s
-                  WHERE type=%s AND id=%s AND filename=%s
-                  """, (new_realm, new_id, self.parent_realm, self.parent_id,
-                        self.filename))
-            dirname = os.path.dirname(new_path)
-            if not os.path.exists(dirname):
-                os.makedirs(dirname)
-            path = self.path
-            if os.path.isfile(path):
-                try:
-                    os.rename(path, new_path)
-                except OSError as e:
-                    self.env.log.error("Failed to move attachment file %s: %s",
-                                       path,
-                                       exception_to_unicode(e, traceback=True))
-                    raise TracError(_("Could not reparent attachment %(name)s",
-                                      name=self.filename))
-
-        old_realm, old_id = self.parent_realm, self.parent_id
-        self.parent_realm, self.parent_id = new_realm, new_id
-        self.resource = Resource(new_realm, new_id).child(self.realm,
-                                                          self.filename)
-
-        self.env.log.info("Attachment reparented: %s" % self.title)
-
-        for listener in AttachmentModule(self.env).change_listeners:
-            if hasattr(listener, 'attachment_reparented'):
-                listener.attachment_reparented(self, old_realm, old_id)
-
-    def insert(self, filename, fileobj, size, t=None):
-        """Create a new Attachment record and save the file content.
-        """
-        self.size = int(size) if size else 0
-        self.filename = None
-        if t is None:
-            t = datetime.now(utc)
-        elif not isinstance(t, datetime): # Compatibility with 0.11
-            t = to_datetime(t, utc)
-        self.date = t
-
-        parent_resource = self.resource.parent
-        if not resource_exists(self.env, parent_resource):
-            raise ResourceNotFound(
-                _("%(parent)s doesn't exist, can't create attachment",
-                  parent=get_resource_name(self.env, parent_resource)))
-
-        # Make sure the path to the attachment is inside the environment
-        # attachments directory
-        attachments_dir = os.path.join(os.path.normpath(self.env.path),
-                                       'files', 'attachments')
-        dir = self.path
-        commonprefix = os.path.commonprefix([attachments_dir, dir])
-        if commonprefix != attachments_dir:
-            raise TracError(_('Cannot create attachment "%(att)s" as '
-                              '%(realm)s:%(id)s is invalid',
-                              att=filename, realm=self.parent_realm,
-                              id=self.parent_id))
-
-        if not os.access(dir, os.F_OK):
-            os.makedirs(dir)
-        filename, targetfile = self._create_unique_file(dir, filename)
-        with targetfile:
-            with self.env.db_transaction as db:
-                db("INSERT INTO attachment VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                   (self.parent_realm, self.parent_id, filename, self.size,
-                    to_utimestamp(t), self.description, self.author,
-                    self.ipnr))
-                shutil.copyfileobj(fileobj, targetfile)
-                self.resource.id = self.filename = filename
-
-                self.env.log.info("New attachment: %s by %s", self.title,
-                                  self.author)
-
-        for listener in AttachmentModule(self.env).change_listeners:
-            listener.attachment_added(self)
-
-    @classmethod
-    def select(cls, env, parent_realm, parent_id):
-        """Iterator yielding all `Attachment` instances attached to
-        resource identified by `parent_realm` and `parent_id`.
-        """
-        for row in env.db_query("""
-                SELECT filename, description, size, time, author, ipnr
-                FROM attachment WHERE type=%s AND id=%s ORDER BY time
-                """, (parent_realm, unicode(parent_id))):
-            attachment = Attachment(env, parent_realm, parent_id)
-            attachment._from_database(*row)
-            yield attachment
-
-    @classmethod
-    def delete_all(cls, env, parent_realm, parent_id):
-        """Delete all attachments of a given resource.
-        """
-        attachment_dir = None
-        with env.db_transaction as db:
-            for attachment in cls.select(env, parent_realm, parent_id):
-                attachment_dir = os.path.dirname(attachment.path)
-                attachment.delete()
-        if attachment_dir:
-            try:
-                os.rmdir(attachment_dir)
-            except OSError as e:
-                env.log.error("Can't delete attachment directory %s: %s",
-                              attachment_dir,
-                              exception_to_unicode(e, traceback=True))
-
-    @classmethod
-    def reparent_all(cls, env, parent_realm, parent_id, new_realm, new_id):
-        """Reparent all attachments of a given resource to another resource."""
-        attachment_dir = None
-        with env.db_transaction as db:
-            for attachment in list(cls.select(env, parent_realm, parent_id)):
-                attachment_dir = os.path.dirname(attachment.path)
-                attachment.reparent(new_realm, new_id)
-        if attachment_dir:
-            try:
-                os.rmdir(attachment_dir)
-            except OSError as e:
-                env.log.error("Can't delete attachment directory %s: %s",
-                              attachment_dir,
-                              exception_to_unicode(e, traceback=True))
-
-    def open(self):
-        path = self.path
-        self.env.log.debug('Trying to open attachment at %s', path)
-        try:
-            fd = open(path, 'rb')
-        except IOError:
-            raise ResourceNotFound(_("Attachment '%(filename)s' not found",
-                                     filename=self.filename))
-        return fd
-
-    def _create_unique_file(self, dir, filename):
-        parts = os.path.splitext(filename)
-        flags = os.O_CREAT + os.O_WRONLY + os.O_EXCL
-        if hasattr(os, 'O_BINARY'):
-            flags += os.O_BINARY
-        idx = 1
-        while 1:
-            path = os.path.join(dir, self._get_hashed_filename(filename))
-            try:
-                return filename, os.fdopen(os.open(path, flags, 0666), 'w')
-            except OSError as e:
-                if e.errno != errno.EEXIST:
-                    raise
-                idx += 1
-                # A sanity check
-                if idx > 100:
-                    raise Exception('Failed to create unique name: ' + path)
-                filename = '%s.%d%s' % (parts[0], idx, parts[1])
-
-
 class AttachmentModule(Component):
 
     implements(IRequestHandler, INavigationContributor, IWikiSyntaxProvider,
                IResourceManager)
 
+    realm = 'attachment'
     is_valid_default_handler = False
 
     change_listeners = ExtensionPoint(IAttachmentChangeListener)
@@ -501,7 +210,7 @@ class AttachmentModule(Component):
             elif action != 'new':
                 return self._render_list(req, parent)
 
-        attachment = Attachment(self.env, parent.child('attachment', filename))
+        attachment = Attachment(self.env, parent.child(self.realm, filename))
 
         if req.method == 'POST':
             if action == 'new':
@@ -550,7 +259,7 @@ class AttachmentModule(Component):
         attachments = self.viewable_attachments(context)
         parent = context.resource
         total_size = sum(attachment.size for attachment in attachments)
-        new_att = parent.child('attachment')
+        new_att = parent.child(self.realm)
         return {'attach_href': get_resource_url(self.env, new_att,
                                                 context.href),
                 'download_href': get_resource_url(self.env, new_att,
@@ -585,7 +294,7 @@ class AttachmentModule(Component):
         """
         for change, realm, id, filename, time, descr, author in \
                 self.get_history(start, stop, resource_realm.realm):
-            attachment = resource_realm(id=id).child('attachment', filename)
+            attachment = resource_realm(id=id).child(self.realm, filename)
             if 'ATTACHMENT_VIEW' in req.perm(attachment):
                 yield ('attachment', time, author, (attachment, descr), self)
 
@@ -617,7 +326,7 @@ class AttachmentModule(Component):
                     SELECT id, time, filename, description, author
                     FROM attachment WHERE type = %s AND """ + sql_query,
                     (resource_realm.realm,) + args):
-                attachment = resource_realm(id=id).child('attachment', filename)
+                attachment = resource_realm(id=id).child(self.realm, filename)
                 if 'ATTACHMENT_VIEW' in req.perm(attachment):
                     yield (get_resource_url(self.env, attachment, req.href),
                            get_resource_shortname(self.env, attachment),
@@ -627,7 +336,7 @@ class AttachmentModule(Component):
     # IResourceManager methods
 
     def get_resource_realms(self):
-        yield 'attachment'
+        yield self.realm
 
     def get_resource_url(self, resource, href, **kwargs):
         """Return an URL to the attachment itself.
@@ -700,16 +409,7 @@ class AttachmentModule(Component):
             raise TracError(_('Maximum attachment size: %(num)s',
                               num=pretty_size(max_size)), _('Upload failed'))
 
-        # We try to normalize the filename to unicode NFC if we can.
-        # Files uploaded from OS X might be in NFD.
-        filename = unicodedata.normalize('NFC', unicode(upload.filename,
-                                                        'utf-8'))
-        filename = filename.strip()
-        # Replace backslashes with slashes if filename is Windows full path
-        if filename.startswith('\\') or re.match(r'[A-Za-z]:\\', filename):
-            filename = filename.replace('\\', '/')
-        # We want basename to be delimited by only slashes on all platforms
-        filename = posixpath.basename(filename)
+        filename = _normalized_filename(upload.filename)
         if not filename:
             raise TracError(_('No file uploaded'))
         # Now the filename is known, update the attachment resource
@@ -885,8 +585,8 @@ class AttachmentModule(Component):
             add_link(req, 'alternate', raw_href, _('Original Format'),
                      mime_type)
 
-            self.log.debug("Rendering preview of file %s with mime-type %s"
-                           % (attachment.filename, mime_type))
+            self.log.debug("Rendering preview of file %s with mime-type %s",
+                           attachment.filename, mime_type)
 
             data['preview'] = mimeview.preview_data(
                 web_context(req, attachment.resource), fd,
@@ -902,14 +602,14 @@ class AttachmentModule(Component):
             known_realms = ResourceSystem(self.env).get_known_realms()
             # new-style attachment: TracLinks (filename:realm:id)
             if ids[1] in known_realms:
-                attachment = Resource(ids[1], ids[2]).child('attachment',
+                attachment = Resource(ids[1], ids[2]).child(self.realm,
                                                             ids[0])
             else: # try old-style attachment: TracLinks (realm:id:filename)
                 if ids[0] in known_realms:
-                    attachment = Resource(ids[0], ids[1]).child('attachment',
+                    attachment = Resource(ids[0], ids[1]).child(self.realm,
                                                                 ids[2])
         else: # local attachment: TracLinks (filename)
-            attachment = formatter.resource.child('attachment', link)
+            attachment = formatter.resource.child(self.realm, link)
         if attachment and 'ATTACHMENT_VIEW' in formatter.perm(attachment):
             try:
                 model = Attachment(self.env, attachment)
@@ -941,11 +641,309 @@ class AttachmentModule(Component):
         return tag.a(label, class_='missing attachment')
 
 
+class Attachment(object):
+
+    realm = AttachmentModule.realm
+
+    @property
+    def resource(self):
+        return Resource(self.parent_realm, self.parent_id) \
+               .child(self.realm, self.filename)
+
+    def __init__(self, env, parent_realm_or_attachment_resource,
+                 parent_id=None, filename=None):
+        if isinstance(parent_realm_or_attachment_resource, Resource):
+            resource = parent_realm_or_attachment_resource
+            self.parent_realm = resource.parent.realm
+            self.parent_id = unicode(resource.parent.id)
+            self.filename = resource.id
+        else:
+            self.parent_realm = parent_realm_or_attachment_resource
+            self.parent_id = unicode(parent_id)
+            self.filename = filename
+
+        self.env = env
+        if self.filename:
+            self._fetch(self.filename)
+        else:
+            self.filename = None
+            self.description = None
+            self.size = None
+            self.date = None
+            self.author = None
+            self.ipnr = None
+
+    def __repr__(self):
+        return '<%s %r>' % (self.__class__.__name__, self.filename)
+
+    def _from_database(self, filename, description, size, time, author, ipnr):
+        self.filename = filename
+        self.description = description
+        self.size = int(size) if size else 0
+        self.date = from_utimestamp(time or 0)
+        self.author = author
+        self.ipnr = ipnr
+
+    def _fetch(self, filename):
+        for row in self.env.db_query("""
+                SELECT filename, description, size, time, author, ipnr
+                FROM attachment WHERE type=%s AND id=%s AND filename=%s
+                ORDER BY time
+                """, (self.parent_realm, unicode(self.parent_id), filename)):
+            self._from_database(*row)
+            break
+        else:
+            self.filename = filename
+            raise ResourceNotFound(_("Attachment '%(title)s' does not exist.",
+                                     title=self.title),
+                                   _('Invalid Attachment'))
+
+    # _get_path() and _get_hashed_filename() are class methods so that they
+    # can be used in db28.py.
+
+    @classmethod
+    def _get_path(cls, env_path, parent_realm, parent_id, filename):
+        """Get the path of an attachment.
+
+        WARNING: This method is used by db28.py for moving attachments from
+        the old "attachments" directory to the "files" directory. Please check
+        all changes so that they don't break the upgrade.
+        """
+        path = os.path.join(env_path, 'files', 'attachments',
+                            parent_realm)
+        hash = sha1(parent_id.encode('utf-8')).hexdigest()
+        path = os.path.join(path, hash[0:3], hash)
+        if filename:
+            path = os.path.join(path, cls._get_hashed_filename(filename))
+        return os.path.normpath(path)
+
+    _extension_re = re.compile(r'\.[A-Za-z0-9]+\Z')
+
+    @classmethod
+    def _get_hashed_filename(cls, filename):
+        """Get the hashed filename corresponding to the given filename.
+
+        WARNING: This method is used by db28.py for moving attachments from
+        the old "attachments" directory to the "files" directory. Please check
+        all changes so that they don't break the upgrade.
+        """
+        hash = sha1(filename.encode('utf-8')).hexdigest()
+        match = cls._extension_re.search(filename)
+        return hash + match.group(0) if match else hash
+
+    @property
+    def path(self):
+        return self._get_path(self.env.path, self.parent_realm, self.parent_id,
+                              self.filename)
+
+    @property
+    def title(self):
+        return '%s:%s: %s' % (self.parent_realm, self.parent_id, self.filename)
+
+    def delete(self):
+        """Delete the attachment, both the record in the database and
+        the file itself.
+        """
+        assert self.filename, "Cannot delete non-existent attachment"
+
+        with self.env.db_transaction as db:
+            db("""
+                DELETE FROM attachment WHERE type=%s AND id=%s AND filename=%s
+                """, (self.parent_realm, self.parent_id, self.filename))
+            path = self.path
+            if os.path.isfile(path):
+                try:
+                    os.unlink(path)
+                except OSError as e:
+                    self.env.log.error("Failed to delete attachment "
+                                       "file %s: %s",
+                                       path,
+                                       exception_to_unicode(e, traceback=True))
+                    raise TracError(_("Could not delete attachment"))
+
+        self.env.log.info("Attachment removed: %s", self.title)
+
+        for listener in AttachmentModule(self.env).change_listeners:
+            listener.attachment_deleted(self)
+
+    def reparent(self, new_realm, new_id):
+        assert self.filename, "Cannot reparent non-existent attachment"
+        new_id = unicode(new_id)
+        new_path = self._get_path(self.env.path, new_realm, new_id,
+                                  self.filename)
+
+        # Make sure the path to the attachment is inside the environment
+        # attachments directory
+        attachments_dir = os.path.join(os.path.normpath(self.env.path),
+                                       'files', 'attachments')
+        commonprefix = os.path.commonprefix([attachments_dir, new_path])
+        if commonprefix != attachments_dir:
+            raise TracError(_('Cannot reparent attachment "%(att)s" as '
+                              '%(realm)s:%(id)s is invalid',
+                              att=self.filename, realm=new_realm, id=new_id))
+
+        if os.path.exists(new_path):
+            raise TracError(_('Cannot reparent attachment "%(att)s" as '
+                              'it already exists in %(realm)s:%(id)s',
+                              att=self.filename, realm=new_realm, id=new_id))
+        with self.env.db_transaction as db:
+            db("""UPDATE attachment SET type=%s, id=%s
+                  WHERE type=%s AND id=%s AND filename=%s
+                  """, (new_realm, new_id, self.parent_realm, self.parent_id,
+                        self.filename))
+            dirname = os.path.dirname(new_path)
+            if not os.path.exists(dirname):
+                os.makedirs(dirname)
+            path = self.path
+            if os.path.isfile(path):
+                try:
+                    os.rename(path, new_path)
+                except OSError as e:
+                    self.env.log.error("Failed to move attachment file %s: %s",
+                                       path,
+                                       exception_to_unicode(e, traceback=True))
+                    raise TracError(_("Could not reparent attachment %(name)s",
+                                      name=self.filename))
+
+        old_realm, old_id = self.parent_realm, self.parent_id
+        self.parent_realm, self.parent_id = new_realm, new_id
+
+        self.env.log.info("Attachment reparented: %s", self.title)
+
+        for listener in AttachmentModule(self.env).change_listeners:
+            if hasattr(listener, 'attachment_reparented'):
+                listener.attachment_reparented(self, old_realm, old_id)
+
+    def insert(self, filename, fileobj, size, t=None):
+        """Create a new Attachment record and save the file content.
+        """
+        self.size = int(size) if size else 0
+        self.filename = None
+        if t is None:
+            t = datetime.now(utc)
+        elif not isinstance(t, datetime): # Compatibility with 0.11
+            t = to_datetime(t, utc)
+        self.date = t
+
+        parent_resource = Resource(self.parent_realm, self.parent_id)
+        if not resource_exists(self.env, parent_resource):
+            raise ResourceNotFound(
+                _("%(parent)s doesn't exist, can't create attachment",
+                  parent=get_resource_name(self.env, parent_resource)))
+
+        # Make sure the path to the attachment is inside the environment
+        # attachments directory
+        attachments_dir = os.path.join(os.path.normpath(self.env.path),
+                                       'files', 'attachments')
+        dir = self.path
+        commonprefix = os.path.commonprefix([attachments_dir, dir])
+        if commonprefix != attachments_dir:
+            raise TracError(_('Cannot create attachment "%(att)s" as '
+                              '%(realm)s:%(id)s is invalid',
+                              att=filename, realm=self.parent_realm,
+                              id=self.parent_id))
+
+        if not os.access(dir, os.F_OK):
+            os.makedirs(dir)
+        filename, targetfile = self._create_unique_file(dir, filename)
+        with targetfile:
+            with self.env.db_transaction as db:
+                db("INSERT INTO attachment VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                   (self.parent_realm, self.parent_id, filename, self.size,
+                    to_utimestamp(t), self.description, self.author,
+                    self.ipnr))
+                shutil.copyfileobj(fileobj, targetfile)
+                self.filename = filename
+
+                self.env.log.info("New attachment: %s by %s", self.title,
+                                  self.author)
+
+        for listener in AttachmentModule(self.env).change_listeners:
+            listener.attachment_added(self)
+
+    @classmethod
+    def select(cls, env, parent_realm, parent_id):
+        """Iterator yielding all `Attachment` instances attached to
+        resource identified by `parent_realm` and `parent_id`.
+        """
+        for row in env.db_query("""
+                SELECT filename, description, size, time, author, ipnr
+                FROM attachment WHERE type=%s AND id=%s ORDER BY time
+                """, (parent_realm, unicode(parent_id))):
+            attachment = Attachment(env, parent_realm, parent_id)
+            attachment._from_database(*row)
+            yield attachment
+
+    @classmethod
+    def delete_all(cls, env, parent_realm, parent_id):
+        """Delete all attachments of a given resource.
+        """
+        attachment_dir = None
+        with env.db_transaction as db:
+            for attachment in cls.select(env, parent_realm, parent_id):
+                attachment_dir = os.path.dirname(attachment.path)
+                attachment.delete()
+        if attachment_dir:
+            try:
+                os.rmdir(attachment_dir)
+            except OSError as e:
+                env.log.error("Can't delete attachment directory %s: %s",
+                              attachment_dir,
+                              exception_to_unicode(e, traceback=True))
+
+    @classmethod
+    def reparent_all(cls, env, parent_realm, parent_id, new_realm, new_id):
+        """Reparent all attachments of a given resource to another resource."""
+        attachment_dir = None
+        with env.db_transaction as db:
+            for attachment in list(cls.select(env, parent_realm, parent_id)):
+                attachment_dir = os.path.dirname(attachment.path)
+                attachment.reparent(new_realm, new_id)
+        if attachment_dir:
+            try:
+                os.rmdir(attachment_dir)
+            except OSError as e:
+                env.log.error("Can't delete attachment directory %s: %s",
+                              attachment_dir,
+                              exception_to_unicode(e, traceback=True))
+
+    def open(self):
+        path = self.path
+        self.env.log.debug('Trying to open attachment at %s', path)
+        try:
+            fd = open(path, 'rb')
+        except IOError:
+            raise ResourceNotFound(_("Attachment '%(filename)s' not found",
+                                     filename=self.filename))
+        return fd
+
+    def _create_unique_file(self, dir, filename):
+        parts = os.path.splitext(filename)
+        flags = os.O_CREAT + os.O_WRONLY + os.O_EXCL
+        if hasattr(os, 'O_BINARY'):
+            flags += os.O_BINARY
+        idx = 1
+        while 1:
+            path = os.path.join(dir, self._get_hashed_filename(filename))
+            try:
+                return filename, os.fdopen(os.open(path, flags, 0666), 'w')
+            except OSError as e:
+                if e.errno != errno.EEXIST:
+                    raise
+                idx += 1
+                # A sanity check
+                if idx > 100:
+                    raise Exception('Failed to create unique name: ' + path)
+                filename = '%s.%d%s' % (parts[0], idx, parts[1])
+
+
 class LegacyAttachmentPolicy(Component):
 
     implements(IPermissionPolicy)
 
     delegates = ExtensionPoint(ILegacyAttachmentPolicyDelegate)
+
+    realm = AttachmentModule.realm
 
     # IPermissionPolicy methods
 
@@ -960,15 +958,15 @@ class LegacyAttachmentPolicy(Component):
 
     def check_permission(self, action, username, resource, perm):
         perm_map = self._perm_maps.get(action)
-        if not perm_map or not resource or resource.realm != 'attachment':
+        if not perm_map or not resource or resource.realm != self.realm:
             return
         legacy_action = perm_map.get(resource.parent.realm)
         if legacy_action:
             decision = legacy_action in perm(resource.parent)
             if not decision:
                 self.log.debug('LegacyAttachmentPolicy denied %s access to '
-                               '%s. User needs %s' %
-                               (username, resource, legacy_action))
+                               '%s. User needs %s',
+                               username, resource, legacy_action)
             return decision
         else:
             for d in self.delegates:
@@ -1062,8 +1060,9 @@ class AttachmentAdmin(Component):
         attachment = Attachment(self.env, realm, id)
         attachment.author = author
         attachment.description = description
+        filename = _normalized_filename(os.path.basename(path))
         with open(path, 'rb') as f:
-            attachment.insert(os.path.basename(path), f, os.path.getsize(path))
+            attachment.insert(filename, f, os.path.getsize(path))
 
     def _do_remove(self, resource, name):
         (realm, id) = self.split_resource(resource)
@@ -1087,3 +1086,26 @@ class AttachmentAdmin(Component):
             finally:
                 if destination is not None:
                     output.close()
+
+
+_control_codes_re = re.compile(
+    '[' +
+    ''.join(filter(lambda c: unicodedata.category(c) == 'Cc',
+                   map(unichr, xrange(0x10000)))) +
+    ']')
+
+def _normalized_filename(filepath):
+    # We try to normalize the filename to unicode NFC if we can.
+    # Files uploaded from OS X might be in NFD.
+    if not isinstance(filepath, unicode):
+        filepath = unicode(filepath, 'utf-8')
+    filepath = unicodedata.normalize('NFC', filepath)
+    # Replace control codes with spaces, e.g. NUL, LF, DEL, U+009F
+    filepath = _control_codes_re.sub(' ', filepath)
+    # Replace backslashes with slashes if filename is Windows full path
+    if filepath.startswith('\\') or re.match(r'[A-Za-z]:\\', filepath):
+        filepath = filepath.replace('\\', '/')
+    # We want basename to be delimited by only slashes on all platforms
+    filename = posixpath.basename(filepath)
+    filename = stripws(filename)
+    return filename

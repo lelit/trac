@@ -26,9 +26,16 @@ from trac.wiki.api import WikiSystem, validate_page_name
 
 
 class WikiPage(object):
-    """Represents a wiki page (new or existing)."""
+    """Represents a wiki page (new or existing).
 
-    realm = 'wiki'
+    :since 1.0.3: the `ipnr` is deprecated and will be removed in 1.3.1
+    """
+
+    realm = WikiSystem.realm
+
+    @property
+    def resource(self):
+        return Resource(self.realm, self.name, self._resource_version)
 
     def __init__(self, env, name=None, version=None):
         """Create a new page object or retrieves an existing page.
@@ -46,17 +53,22 @@ class WikiPage(object):
                 version = None
 
         if isinstance(name, Resource):
-            self.resource = name
-            name = self.resource.id
-            if version is None and self.resource.version is not None:
+            resource = name
+            name = resource.id
+            if version is None and resource.version is not None:
                 try:
-                    version = int(self.resource.version)
+                    version = int(resource.version)
                 except ValueError:
                     version = None
-        else:
-            self.resource = Resource(self.realm, name, version)
 
         self.name = name
+        # The version attribute always returns the version of the page,
+        # however resource.version will be None when version hasn't been
+        # specified when creating the object and the object represents the
+        # most recent version of the page. This behavior is used in web_ui.py
+        # to determine whether to render a versioned page, or just the most
+        # recent version of the page.
+        self._resource_version = version
         if name:
             self._fetch(name, version)
         else:
@@ -90,6 +102,13 @@ class WikiPage(object):
             self.text = self.comment = self.author = ''
             self.time = None
             self.readonly = 0
+            
+    def __repr__(self):
+        if self.name is None:
+            name = self.name
+        else:
+            name = u'%s@%s' % (self.name, self.version)
+        return '<%s %r>' % (self.__class__.__name__, name)
 
     exists = property(lambda self: self.version > 0)
 
@@ -130,8 +149,11 @@ class WikiPage(object):
                 if hasattr(listener, 'wiki_page_version_deleted'):
                     listener.wiki_page_version_deleted(self)
 
-    def save(self, author, comment, remote_addr, t=None):
+    def save(self, author, comment, remote_addr=None, t=None):
         """Save a new version of a page.
+
+        :since 1.0.3: `remote_addr` is optional and deprecated, and will be
+                      removed in 1.3.1
         """
         if not validate_page_name(self.name):
             raise TracError(_("Invalid Wiki page name '%(name)s'",
@@ -151,7 +173,6 @@ class WikiPage(object):
                             author, remote_addr, self.text, comment,
                             self.readonly))
                 self.version += 1
-                self.resource = self.resource(version=self.version)
             else:
                 db("UPDATE wiki SET readonly=%s WHERE name=%s",
                    (self.readonly, self.name))
@@ -167,8 +188,13 @@ class WikiPage(object):
             if self.version == 1:
                 listener.wiki_page_added(self)
             else:
-                listener.wiki_page_changed(self, self.version, t, comment,
-                                           author, remote_addr)
+                from trac.util import arity
+                if arity(listener.wiki_page_changed) == 6:
+                    listener.wiki_page_changed(self, self.version, t,
+                                               comment, author, remote_addr)
+                else:
+                    listener.wiki_page_changed(self, self.version, t,
+                                               comment, author)
 
         self.old_readonly = self.readonly
         self.old_text = self.text
@@ -200,15 +226,38 @@ class WikiPage(object):
             Attachment.reparent_all(self.env, self.realm, old_name,
                                     self.realm, new_name)
 
-        self.name = self.resource.id = new_name
+        self.name = new_name
         self.env.log.info("Renamed page %s to %s", old_name, new_name)
 
         for listener in WikiSystem(self.env).change_listeners:
             if hasattr(listener, 'wiki_page_renamed'):
                 listener.wiki_page_renamed(self, old_name)
 
+    def edit_comment(self, new_comment):
+        """Edit comment of wiki page version in-place."""
+        if not self.exists:
+            raise TracError(_("Cannot edit comment of non-existent page"))
+
+        old_comment = self.comment
+
+        with self.env.db_transaction as db:
+            db("UPDATE wiki SET comment=%s WHERE name=%s AND version=%s",
+               (new_comment, self.name, self.version))
+
+        self.comment = new_comment
+        self.env.log.info("Changed comment on page %s version %s to %s",
+                          self.name, self.version, new_comment)
+
+        for listener in WikiSystem(self.env).change_listeners:
+            if hasattr(listener, 'wiki_page_comment_modified'):
+                listener.wiki_page_comment_modified(self, old_comment)
+
     def get_history(self):
         """Retrieve the edit history of a wiki page.
+
+        :return: a tuple containing the `version`, `datetime`, `author`,
+                  `comment` and `ipnr`.
+        :since 1.0.3: use of `ipnr` is deprecated and will be removed in 1.3.1
         """
         for version, ts, author, comment, ipnr in self.env.db_query("""
                 SELECT version, time, author, comment, ipnr FROM wiki

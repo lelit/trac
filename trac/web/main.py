@@ -35,8 +35,8 @@ from genshi.output import DocType
 from genshi.template import TemplateLoader
 
 from trac import __version__ as TRAC_VERSION
-from trac.config import BoolOption, ConfigurationError, ExtensionOption, \
-                        Option, OrderedExtensionsOption
+from trac.config import BoolOption, ChoiceOption, ConfigurationError, \
+                        ExtensionOption, Option, OrderedExtensionsOption
 from trac.core import *
 from trac.env import open_environment
 from trac.loader import get_plugin_info, match_plugins_to_frames
@@ -47,7 +47,8 @@ from trac.util import arity, get_frame_info, get_last_traceback, hex_entropy, \
                       warn_setuptools_issue
 from trac.util.concurrency import threading
 from trac.util.datefmt import format_datetime, localtz, timezone, user_time
-from trac.util.text import exception_to_unicode, shorten_line, to_unicode
+from trac.util.text import exception_to_unicode, shorten_line, to_unicode, \
+                           unicode_quote
 from trac.util.translation import _, get_negotiated_locale, has_babel, \
                                   safefmt, tag_
 from trac.web.api import *
@@ -97,8 +98,7 @@ class RequestDispatcher(Component):
 
     filters = OrderedExtensionsOption('trac', 'request_filters',
                                       IRequestFilter,
-        doc="""Ordered list of filters to apply to all requests.
-            (''since 0.10'')""")
+        doc="""Ordered list of filters to apply to all requests.""")
 
     default_handler = ExtensionOption('trac', 'default_handler',
                                       IRequestHandler, 'WikiModule',
@@ -107,7 +107,7 @@ class RequestDispatcher(Component):
 
         Options include `TimelineModule`, `RoadmapModule`,
         `BrowserModule`, `QueryModule`, `ReportModule`, `TicketModule`
-        and `WikiModule`. (''since 0.9'')""")
+        and `WikiModule`.""")
 
     default_timezone = Option('trac', 'default_timezone', '',
         """The default timezone to use""")
@@ -117,7 +117,8 @@ class RequestDispatcher(Component):
         been set. (''since 0.12.1'')
         """)
 
-    default_date_format = Option('trac', 'default_date_format', '',
+    default_date_format = ChoiceOption('trac', 'default_date_format',
+                                       ('', 'iso8601'),
         """The date format. Valid options are 'iso8601' for selecting
         ISO 8601 format, or leave it empty which means the default
         date format will be inferred from the browser's default
@@ -192,7 +193,7 @@ class RequestDispatcher(Component):
                 if not chosen_handler:
                     if req.path_info.endswith('/'):
                         # Strip trailing / and redirect
-                        target = req.path_info.rstrip('/').encode('utf-8')
+                        target = unicode_quote(req.path_info.rstrip('/'))
                         if req.query_string:
                             target += '?' + req.query_string
                         req.redirect(req.href + target, permanent=True)
@@ -561,7 +562,7 @@ def _dispatch_request(req, env, env_error):
 def _send_user_error(req, env, e):
     # See trac/web/api.py for the definition of HTTPException subclasses.
     if env:
-        env.log.warn('[%s] %s' % (req.remote_addr, exception_to_unicode(e)))
+        env.log.warn('[%s] %s', req.remote_addr, exception_to_unicode(e))
     data = {'title': e.title, 'type': 'TracError', 'message': e.message,
             'frames': [], 'traceback': None}
     if e.code == 403 and req.authname == 'anonymous':
@@ -582,7 +583,7 @@ def send_internal_error(env, req, exc_info):
     message = exception_to_unicode(exc_info[1])
     traceback = get_last_traceback()
 
-    frames, plugins, faulty_plugins = [], [], []
+    frames, plugins, faulty_plugins, interface_custom = [], [], [], []
     th = 'http://trac-hacks.org'
     has_admin = False
     try:
@@ -614,6 +615,7 @@ def send_internal_error(env, req, exc_info):
                     plugin_name = info.get('home_page', '').rstrip('/') \
                                                            .split('/')[-1]
                     tracker_args = {'component': plugin_name}
+        interface_custom = Chrome(env).get_interface_customization_files()
 
     def get_description(_):
         if env and has_admin:
@@ -626,9 +628,15 @@ def send_internal_error(env, req, exc_info):
             enabled_plugins = "".join("|| '''`%s`''' || `%s` ||\n"
                                       % (p['name'], p['version'] or _('N/A'))
                                       for p in plugins)
+            files = Chrome(env).get_interface_customization_files().items()
+            interface_files = "".join("|| **%s** || %s ||\n"
+                                      % (k, ", ".join("`%s`" % f for f in v))
+                                      for k, v in sorted(files))
         else:
             sys_info = _("''System information not available''\n")
             enabled_plugins = _("''Plugin information not available''\n")
+            interface_files = _("''Interface customization information not "
+                                 "available''\n")
         return _("""\
 ==== How to Reproduce ====
 
@@ -647,12 +655,16 @@ User agent: `#USER_AGENT#`
 %(sys_info)s
 ==== Enabled Plugins ====
 %(enabled_plugins)s
+==== Interface Customization ====
+%(interface_customization)s
 ==== Python Traceback ====
 {{{
 %(traceback)s}}}""",
             method=req.method, path_info=req.path_info,
             req_args=pformat(req.args), sys_info=sys_info,
-            enabled_plugins=enabled_plugins, traceback=to_unicode(traceback))
+            enabled_plugins=enabled_plugins,
+            interface_customization=interface_files,
+            traceback=to_unicode(traceback))
 
     # Generate the description once in English, once in the current locale
     description_en = get_description(lambda s, **kw: safefmt(s, kw))
@@ -666,6 +678,7 @@ User agent: `#USER_AGENT#`
             'traceback': traceback, 'frames': frames,
             'shorten_line': shorten_line, 'repr': safe_repr,
             'plugins': plugins, 'faulty_plugins': faulty_plugins,
+            'interface': interface_custom,
             'tracker': tracker, 'tracker_args': tracker_args,
             'description': description, 'description_en': description_en}
 

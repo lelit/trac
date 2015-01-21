@@ -168,8 +168,9 @@ class HTTPException(TracBaseError):
             self.detail = detail
         if args:
             self.detail = self.detail % args
-        Exception.__init__(self, '%s %s (%s)' % (self.code, self.reason,
-                                                 self.detail))
+        super(HTTPException, self).__init__('%s %s (%s)' % (self.code,
+                                                            self.reason,
+                                                            self.detail))
 
     @property
     def message(self):
@@ -655,7 +656,7 @@ class Request(object):
         self.end_headers()
 
         if not use_xsendfile and self.method != 'HEAD':
-            fileobj = file(path, 'rb')
+            fileobj = open(path, 'rb')
             file_wrapper = self.environ.get('wsgi.file_wrapper', _FileWrapper)
             self._response = file_wrapper(fileobj, 4096)
         raise RequestDone

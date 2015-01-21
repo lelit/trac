@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2005-2009 Edgewall Software
+# Copyright (C) 2005-2014 Edgewall Software
 # Copyright (C) 2005 Jonas Borgström <jonas@edgewall.com>
 # All rights reserved.
 #
@@ -20,28 +20,23 @@ import pkg_resources
 import re
 import shutil
 
-from genshi import HTML
 from genshi.builder import tag
 
 from trac.admin.api import IAdminPanelProvider
 from trac.core import *
 from trac.loader import get_plugin_info, get_plugins_dir
+from trac.log import LOG_LEVELS
 from trac.perm import PermissionSystem, IPermissionRequestor
 from trac.util.datefmt import all_timezones, pytz
 from trac.util.text import exception_to_unicode, \
                            unicode_to_base64, unicode_from_base64
 from trac.util.translation import _, Locale, get_available_locales, ngettext
-from trac.web import HTTPNotFound, IRequestHandler
+from trac.web.api import HTTPNotFound, IRequestHandler, \
+                         is_valid_default_handler
 from trac.web.chrome import add_notice, add_stylesheet, \
                             add_warning, Chrome, INavigationContributor, \
                             ITemplateProvider
-from trac.web.api import is_valid_default_handler
 from trac.wiki.formatter import format_to_html
-
-try:
-    from webadmin import IAdminPageProvider
-except ImportError:
-    IAdminPageProvider = None
 
 
 class AdminModule(Component):
@@ -50,10 +45,6 @@ class AdminModule(Component):
     implements(INavigationContributor, IRequestHandler, ITemplateProvider)
 
     panel_providers = ExtensionPoint(IAdminPanelProvider)
-    if IAdminPageProvider:
-        old_providers = ExtensionPoint(IAdminPageProvider)
-    else:
-        old_providers = None
 
     # INavigationContributor methods
 
@@ -114,23 +105,8 @@ class AdminModule(Component):
         if not provider:
             raise HTTPNotFound(_("Unknown administration panel"))
 
-        if hasattr(provider, 'render_admin_panel'):
-            template, data = provider.render_admin_panel(req, cat_id, panel_id,
-                                                         path_info)
-
-        else: # support for legacy WebAdmin panels
-            data = {}
-            cstmpl, ct = provider.process_admin_request(req, cat_id, panel_id,
-                                                        path_info)
-            output = cstmpl.render()
-
-            title = _("Untitled")
-            for panel in panels:
-                if (panel[0], panel[2]) == (cat_id, panel_id):
-                    title = panel[3]
-
-            data.update({'page_title': title, 'page_body': HTML(output)})
-            template = 'admin_legacy.html'
+        template, data = \
+            provider.render_admin_panel(req, cat_id, panel_id, path_info)
 
         data.update({
             'active_cat': cat_id, 'active_panel': panel_id,
@@ -164,14 +140,6 @@ class AdminModule(Component):
             for panel in p:
                 providers[(panel[0], panel[2])] = provider
             panels += p
-
-        # Add panels contributed by legacy WebAdmin plugins
-        if IAdminPageProvider:
-            for provider in self.old_providers:
-                p = list(provider.get_admin_pages(req))
-                for page in p:
-                    providers[(page[0], page[2])] = provider
-                panels += p
 
         return panels, providers
 
@@ -241,6 +209,12 @@ class BasicsAdminPanel(Component):
                 default_date_format = ''
             self.config.set('trac', 'default_date_format', default_date_format)
 
+            default_dateinfo_format = req.args.get('default_dateinfo_format')
+            if default_dateinfo_format not in ('relative', 'absolute'):
+                default_dateinfo_format = 'relative'
+            self.config.set('trac', 'default_dateinfo_format',
+                            default_dateinfo_format)
+
             _save_config(self.config, req, self.log)
             req.redirect(req.href.admin(cat, page))
 
@@ -248,6 +222,8 @@ class BasicsAdminPanel(Component):
         default_timezone = self.config.get('trac', 'default_timezone')
         default_language = self.config.get('trac', 'default_language')
         default_date_format = self.config.get('trac', 'default_date_format')
+        default_dateinfo_format = self.config.get('trac',
+                                                  'default_dateinfo_format')
 
         data = {
             'default_handler': default_handler,
@@ -258,6 +234,7 @@ class BasicsAdminPanel(Component):
             'default_language': default_language.replace('-', '_'),
             'languages': languages,
             'default_date_format': default_date_format,
+            'default_dateinfo_format': default_dateinfo_format,
             'has_babel': Locale is not None,
         }
         Chrome(self.env).add_textarea_grips(req)
@@ -278,7 +255,7 @@ class LoggingAdminPanel(Component):
         log_type = self.env.log_type
         log_level = self.env.log_level
         log_file = self.env.log_file
-        log_dir = os.path.join(self.env.path, 'log')
+        log_dir = self.env.get_log_dir()
 
         log_types = [
             dict(name='none', label=_("None"),
@@ -294,8 +271,6 @@ class LoggingAdminPanel(Component):
                  selected=log_type in ('winlog', 'eventlog', 'nteventlog'),
                  disabled=os.name != 'nt'),
         ]
-
-        log_levels = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG']
 
         if req.method == 'POST':
             changed = False
@@ -316,7 +291,7 @@ class LoggingAdminPanel(Component):
                 changed = True
             else:
                 new_level = req.args.get('log_level')
-                if new_level not in log_levels:
+                if new_level not in LOG_LEVELS:
                     raise TracError(
                         _("Unknown log level %(level)s", level=new_level),
                         _("Invalid log level"))
@@ -344,7 +319,7 @@ class LoggingAdminPanel(Component):
 
         data = {
             'type': log_type, 'types': log_types,
-            'level': log_level, 'levels': log_levels,
+            'level': log_level, 'levels': LOG_LEVELS,
             'file': log_file, 'dir': log_dir
         }
         return 'admin_logging.html', {'log': data}
@@ -476,11 +451,10 @@ class PermissionAdminPanel(Component):
                                   "revoked."))
                 req.redirect(req.href.admin(cat, page))
 
-        perms = [perm for perm in all_permissions if perm[1].isupper()]
-        groups = [perm for perm in all_permissions if not perm[1].isupper()]
-
         return 'admin_perms.html', {
-            'actions': all_actions, 'perms': perms, 'groups': groups,
+            'actions': all_actions,
+            'perms': perm.get_users_dict(),
+            'groups': perm.get_groups_dict(),
             'unicode_to_base64': unicode_to_base64
         }
 

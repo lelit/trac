@@ -17,6 +17,7 @@ working with a Trac environment to make test cases more succinct.
 
 import re
 
+from genshi.builder import tag
 from trac.tests.functional import internal_error
 from trac.tests.functional.better_twill import tc, b
 from trac.tests.contentgen import random_page, random_sentence, random_word, \
@@ -79,6 +80,7 @@ class FunctionalTester(object):
 
         `summary` and `description` default to randomly-generated values.
         """
+        info = info or {}
         self.go_to_front()
         tc.follow(r"\bNew Ticket\b")
         tc.notfind(internal_error)
@@ -86,13 +88,17 @@ class FunctionalTester(object):
             summary = random_sentence(5)
         tc.formvalue('propertyform', 'field_summary', summary)
         tc.formvalue('propertyform', 'field_description', random_page())
-        if info:
-            for field, value in info.items():
-                tc.formvalue('propertyform', 'field_%s' % field, value)
+        if 'owner' in info:
+            tc.formvalue('propertyform', 'action', 'assign')
+            tc.formvalue('propertyform',
+                         'action_create_and_assign_reassign_owner',
+                         info.pop('owner'))
+        for field, value in info.items():
+            tc.formvalue('propertyform', 'field_%s' % field, value)
         tc.submit('submit')
+        tc.notfind(internal_error)
         # we should be looking at the newly created ticket
         tc.url(self.url + '/ticket/%s' % (self.ticketcount + 1))
-        tc.notfind(internal_error)
         # Increment self.ticketcount /after/ we've verified that the ticket
         # was created so a failure does not trigger spurious later
         # failures.
@@ -256,7 +262,7 @@ class FunctionalTester(object):
         if content is None:
             content = random_page()
         self.go_to_wiki(name)
-        tc.find("The page %s does not exist." % name)
+        tc.find("The page %s does not exist." % tag.strong(name))
 
         self.edit_wiki_page(name, content, comment)
 

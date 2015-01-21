@@ -244,6 +244,14 @@ class ConnectionBase(object):
         pass
 
     @abstractmethod
+    def reset_tables(self):
+        """Deletes all data from the tables and resets autoincrement indexes.
+
+        :return: list of names of the tables that were reset.
+        """
+        pass
+
+    @abstractmethod
     def update_sequence(self, cursor, table, column='id'):
         """Updates the current value of the primary key sequence for `table`.
         The `column` of the primary key may be specified, which defaults
@@ -303,11 +311,11 @@ class DatabaseManager(Component):
 
     timeout = IntOption('trac', 'timeout', '20',
         """Timeout value for database connection, in seconds.
-        Use '0' to specify ''no timeout''. (''since 0.11'')""")
+        Use '0' to specify ''no timeout''.""")
 
     debug_sql = BoolOption('trac', 'debug_sql', False,
         """Show the SQL queries in the Trac log, at DEBUG level.
-        (''since 0.11.5'')""")
+        """)
 
     def __init__(self):
         self._cnx_pool = None
@@ -344,6 +352,38 @@ class DatabaseManager(Component):
                 table_name = table.name if isinstance(table, Table) else table
                 db.drop_table(table_name)
 
+    def insert_into_tables(self, data_or_callable):
+        """Insert data into existing tables.
+
+        :param data_or_callable: Nested tuples of table names, column names
+                                 and row data:
+                                 (table1,
+                                  (column1, column2),
+                                  ((row1col1, row1col2), (row2col1, row2col2)),
+                                  table2, ...)
+                                or a callable that takes a single parameter
+                                `db` and returns the aforementioned nested
+                                tuple.
+        :since: version 1.1.3
+        """
+        with self.env.db_transaction as db:
+            data = data_or_callable(db) if callable(data_or_callable) \
+                                        else data_or_callable
+            for table, cols, vals in data:
+                db.executemany("INSERT INTO %s (%s) VALUES (%s)"
+                               % (table, ','.join(cols),
+                                  ','.join(['%s'] * len(cols))), vals)
+
+    def reset_tables(self):
+        """Deletes all data from the tables and resets autoincrement indexes.
+
+        :return: list of names of the tables that were reset.
+
+        :since: version 1.1.3
+        """
+        with self.env.db_transaction as db:
+            return db.reset_tables()
+
     def get_connection(self, readonly=False):
         """Get a database connection from the pool.
 
@@ -358,8 +398,41 @@ class DatabaseManager(Component):
             db = ConnectionWrapper(db, readonly=True)
         return db
 
+    def get_database_version(self, name='database_version'):
+        """Returns the database version from the SYSTEM table as an int,
+        or `False` if the entry is not found.
+
+        :param name: The name of the entry that contains the database version
+                     in the SYSTEM table. Defaults to `database_version`,
+                     which contains the database version for Trac.
+        """
+        rows = self.env.db_query("""
+                SELECT value FROM system WHERE name=%s
+                """, (name,))
+        return int(rows[0][0]) if rows else False
+
     def get_exceptions(self):
         return self.get_connector()[0].get_exceptions()
+
+    def set_database_version(self, version, name='database_version'):
+        """Sets the database version in the SYSTEM table.
+
+        :param version: an integer database version.
+        :param name: The name of the entry that contains the database version
+                     in the SYSTEM table. Defaults to `database_version`,
+                     which contains the database version for Trac.
+        """
+        current_database_version = self.get_database_version(name)
+        if current_database_version is False:
+            self.env.db_transaction("""
+                    INSERT INTO system (name, value) VALUES (%s, %s)
+                    """, (name, version))
+        else:
+            self.env.db_transaction("""
+                    UPDATE system SET value=%s WHERE name=%s
+                    """, (version, name))
+            self.log.info("Upgraded %s from %d to %d",
+                          name, current_database_version, version)
 
     def shutdown(self, tid=None):
         if self._cnx_pool:
@@ -391,7 +464,7 @@ class DatabaseManager(Component):
         return connector.backup(dest)
 
     def get_connector(self):
-        scheme, args = _parse_db_str(self.connection_uri)
+        scheme, args = parse_connection_uri(self.connection_uri)
         candidates = [
             (priority, connector)
             for connector in self.connectors
@@ -429,7 +502,16 @@ def get_column_names(cursor):
             for d in cursor.description] if cursor.description else []
 
 
-def _parse_db_str(db_str):
+def parse_connection_uri(db_str):
+    """Parse the database connection string.
+
+    The database connection string for an environment is specified through
+    the `database` option in the `[trac]` section of trac.ini.
+
+    :return: a tuple containing the scheme and a dictionary of attributes:
+             `user`, `password`, `host`, `port`, `path`, `params`.
+    :since: 1.1.3
+    """
     scheme, rest = db_str.split(':', 1)
 
     if not rest.startswith('/'):
@@ -494,3 +576,7 @@ def _parse_db_str(db_str):
     args = zip(('user', 'password', 'host', 'port', 'path', 'params'),
                (user, password, host, port, path, params))
     return scheme, dict([(key, value) for key, value in args if value])
+
+
+# Compatibility for Trac < 1.1.3. Will be removed in 1.3.1.
+_parse_db_str = parse_connection_uri

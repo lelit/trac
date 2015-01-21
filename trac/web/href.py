@@ -33,6 +33,8 @@ class Href(object):
     the path of the URL:
 
     >>> href = Href('/trac')
+    >>> repr(href)
+    "<Href '/trac'>"
     >>> href('ticket', 540)
     '/trac/ticket/540'
     >>> href('ticket', 540, 'attachment', 'bugfix.patch')
@@ -144,6 +146,9 @@ class Href(object):
         self.query_safe = query_safe
         self._derived = {}
 
+    def __repr__(self):
+        return '<%s %r>' % (self.__class__.__name__, self.base)
+
     def __call__(self, *args, **kw):
         href = self.base
         params = []
@@ -187,12 +192,17 @@ class Href(object):
             self._derived[name] = lambda *args, **kw: self(name, *args, **kw)
         return self._derived[name]
 
+    _printable_safe = ''.join(map(chr, xrange(0x21, 0x7f)))
+
     def __add__(self, rhs):
-        if rhs.startswith('/'):
-            return self.base + rhs
-        if rhs:
-            return self.base + '/' + rhs
-        return self.base or '/'
+        if not rhs:
+            return self.base or '/'
+        if rhs.startswith('?'):
+            return (self.base or '/') + \
+                   unicode_quote(rhs, self._printable_safe)
+        if not rhs.startswith('/'):
+            rhs = '/' + rhs
+        return self.base + unicode_quote(rhs, self._printable_safe)
 
 
 if __name__ == '__main__':

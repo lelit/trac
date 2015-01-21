@@ -36,9 +36,9 @@ class InterTracDispatcher(Component):
 
     intertrac_section = ConfigSection('intertrac',
         """This section configures InterTrac prefixes. Options in this section
-        whose name contain a "." define aspects of the InterTrac prefix
-        corresponding to the option name up to the ".". Options whose name
-        don't contain a "." define an alias.
+        whose name contain a `.` define aspects of the InterTrac prefix
+        corresponding to the option name up to the `.`. Options whose name
+        don't contain a `.` define an alias.
 
         The `.url` is mandatory and is used for locating the other Trac.
         This can be a relative URL in case that Trac environment is located
@@ -46,18 +46,6 @@ class InterTracDispatcher(Component):
 
         The `.title` information is used for providing a useful tooltip when
         moving the cursor over an InterTrac link.
-
-        The `.compat` option can be used to activate or disable a
-        ''compatibility'' mode:
-         * If the targeted Trac is running a version below
-           [trac:milestone:0.10 0.10] ([trac:r3526 r3526] to be precise), then
-           it doesn't know how to dispatch an InterTrac link, and it's up to
-           the local Trac to prepare the correct link. Not all links will work
-           that way, but the most common do. This is called the compatibility
-           mode, and is `false` by default.
-         * If you know that the remote Trac knows how to dispatch InterTrac
-           links, you can explicitly disable this compatibility mode and then
-           ''any'' TracLinks can become InterTrac links.
 
         Example configuration:
         {{{

@@ -68,8 +68,7 @@ class SubversionPropertyRenderer(Component):
         Finally, the relative URLs introduced in
         [http://subversion.apache.org/docs/release-notes/1.5.html#externals Subversion 1.5]
         are not yet supported.
-
-        (''since 0.11'')""")
+        """)
 
     def __init__(self):
         self._externals_map = {}
@@ -96,8 +95,8 @@ class SubversionPropertyRenderer(Component):
                 value = value.split()
                 if len(value) != 2:
                     self.log.warn("svn:externals entry %s doesn't contain "
-                            "a space-separated key value pair, skipping.",
-                            dummykey)
+                                  "a space-separated key value pair, "
+                                  "skipping.", dummykey)
                     continue
                 key, value = value
                 self._externals_map[key] = value.replace('%', '%%') \

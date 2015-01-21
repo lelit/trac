@@ -21,7 +21,7 @@ import trac.tests.compat
 from trac import core
 from trac.attachment import Attachment
 from trac.core import TracError, implements
-from trac.resource import ResourceNotFound
+from trac.resource import Resource, ResourceNotFound
 from trac.test import EnvironmentStub
 from trac.ticket.model import (
     Ticket, Component, Milestone, Priority, Type, Version
@@ -109,6 +109,15 @@ class TicketTestCase(unittest.TestCase):
         ticket['foo'] = 'This is a custom field'
         return ticket
 
+    def test_resource_id_is_none(self):
+        ticket = Ticket(self.env)
+        self.assertEqual(Resource('ticket'), ticket.resource)
+
+    def test_resource_exists(self):
+        ticket_id = self._insert_ticket('Foo')
+        ticket = Ticket(self.env, ticket_id)
+        self.assertEqual(Resource('ticket', 1), ticket.resource)
+
     def test_invalid_ticket_id(self):
         self.assertEqual(Ticket.id_is_valid(-1), False)
         self.assertEqual(Ticket.id_is_valid(0), False)
@@ -117,6 +126,12 @@ class TicketTestCase(unittest.TestCase):
         self.assertEqual(Ticket.id_is_valid(1L << 32), False)
         self.assertRaises(ResourceNotFound, Ticket, self.env, -1)
         self.assertRaises(ResourceNotFound, Ticket, self.env, 1L << 32)
+
+    def test_repr(self):
+        ticket = self._create_a_ticket()
+        self.assertEqual("<Ticket None>", repr(ticket))
+        ticket.insert()
+        self.assertEqual("<Ticket 1>", repr(ticket))
 
     def test_create_ticket_1(self):
         ticket = self._create_a_ticket()
@@ -170,6 +185,71 @@ class TicketTestCase(unittest.TestCase):
         log = ticket3.get_changelog()
         self.assertEqual(len(log), 0)
         self.assertRaises(TracError, Ticket, self.env, 1)
+
+    def _test_empty_strings_stored_as_null(self, ticket):
+        """Ticket fields that contain empty strings are stored as NULLs
+        in the database. NULLs are cast to empty strings on fetch.
+        """
+        std_fields = [name for name in ticket.std_fields
+                           if name not in ticket.protected_fields]
+        cst_fields = [name for name in ticket.custom_fields
+                           if name not in ticket.protected_fields]
+
+        # Values are stored as NULL in the database
+        self.assertEqual([(None,) * len(std_fields)],
+                         self.env.db_query("""
+                            SELECT %s FROM ticket WHERE id=%%s
+                            """ % ','.join(std_fields), (ticket.id,)))
+        self.assertEqual([(None,)] * len(cst_fields),
+                         self.env.db_query("""
+                            SELECT value FROM ticket_custom
+                            WHERE ticket=%%s AND name IN (%s)
+                            """ % ','.join(['%s'] * len(cst_fields)),
+                            [ticket.id] + cst_fields))
+        # Values are returned from the model as empty strings
+        for name in ticket.editable_fields:
+            self.assertEqual('', ticket[name], name)
+
+    def test_create_empty_strings_stored_as_null(self):
+        """Ticket fields with empty strings are NULL when creating ticket.
+        """
+        ticket = Ticket(self.env)
+        ticket.populate(dict((name, '') for name in ticket.editable_fields))
+        ticket.insert()
+
+        self._test_empty_strings_stored_as_null(ticket)
+
+    def test_change_empty_strings_stored_as_null(self):
+        """Ticket fields with empty strings are NULL when changing ticket.
+        """
+        ticket = Ticket(self.env)
+        ticket.insert()
+        ticket.populate(dict((name, '') for name in ticket.editable_fields))
+        ticket.save_changes()
+
+        self._test_empty_strings_stored_as_null(ticket)
+
+    def test_whitespace_stripped_from_text_field(self):
+        """Whitespace is stripped from text fields.
+        Test for regression of #11891.
+        """
+        ticket = Ticket(self.env)
+        ticket['keywords'] = 'kw1'
+        ticket['milestone'] = 'milestone1'
+        ticket.insert()
+        
+        ticket['keywords'] = '  kw1'
+        ticket['milestone'] = 'milestone2'
+        ticket.save_changes()
+        changes = self.env.db_query("""
+            SELECT oldvalue, newvalue FROM ticket_change
+            """)
+
+        self.assertEqual('kw1', ticket['keywords'])
+        self.assertEqual('milestone2', ticket['milestone'])
+        self.assertEqual(2, len(changes))
+        self.assertIn(('milestone1', 'milestone2'), changes)
+        self.assertIn(('1', None), changes)
 
     def test_ticket_id_is_always_int(self):
         ticket_id = self._insert_ticket('Foo')
@@ -838,6 +918,11 @@ class EnumTestCase(unittest.TestCase):
     def tearDown(self):
         self.env.reset_db()
 
+    def test_repr(self):
+        self.assertEqual("<Priority None None>", repr(Priority(self.env)))
+        self.assertEqual("<Priority 'major' u'3'>",
+                         repr(Priority(self.env, 'major')))
+
     def test_priority_fetch(self):
         prio = Priority(self.env, 'major')
         self.assertEqual(prio.name, 'major')
@@ -936,6 +1021,7 @@ class MilestoneTestCase(unittest.TestCase):
         self.assertIsNone(milestone.due)
         self.assertIsNone(milestone.completed)
         self.assertEqual('', milestone.description)
+        self.assertEqual("<Milestone None>", repr(milestone))
 
     def test_new_milestone_empty_name(self):
         """
@@ -948,6 +1034,7 @@ class MilestoneTestCase(unittest.TestCase):
         self.assertIsNone(milestone.due)
         self.assertIsNone(milestone.completed)
         self.assertEqual('', milestone.description)
+        self.assertEqual("<Milestone None>", repr(milestone))
 
     def test_existing_milestone(self):
         self.env.db_transaction("INSERT INTO milestone (name) VALUES ('Test')")
@@ -958,6 +1045,7 @@ class MilestoneTestCase(unittest.TestCase):
         self.assertIsNone(milestone.due)
         self.assertIsNone(milestone.completed)
         self.assertEqual('', milestone.description)
+        self.assertEqual("<Milestone u'Test'>", repr(milestone))
 
     def test_create_and_update_milestone(self):
         milestone = Milestone(self.env)
@@ -1221,6 +1309,11 @@ class ComponentTestCase(unittest.TestCase):
         for c in Component.select(self.env):
             self.assertEqual(c.exists, True)
 
+    def test_repr(self):
+        self.assertEqual('<Component None>', repr(Component(self.env)))
+        self.assertEqual("<Component 'component1'>",
+                         repr(Component(self.env, 'component1')))
+        
     def test_create_and_update(self):
         component = Component(self.env)
         component.name = 'Test'
@@ -1255,6 +1348,10 @@ class VersionTestCase(unittest.TestCase):
         """
         for v in Version.select(self.env):
             self.assertEqual(v.exists, True)
+
+    def test_repr(self):
+        self.assertEqual('<Version None>', repr(Version(self.env)))
+        self.assertEqual("<Version '1.0'>", repr(Version(self.env, '1.0')))
 
     def test_create_and_update(self):
         version = Version(self.env)

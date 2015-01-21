@@ -11,8 +11,6 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/.
 
-import shutil
-
 from trac.upgrades import backup_config_file
 from trac.util.text import printout
 from trac.util.translation import _
@@ -35,8 +33,8 @@ def do_upgrade(env, version, cursor):
         env.config.save()
         env.log.info("Enabled ReadonlyWikiPolicy.")
     elif 'ReadonlyWikiPolicy' not in policies:
-        # TRANSLATOR: Wrap message to 80 columns
         env.log.info("ReadonlyWikiPolicy must be manually enabled.")
+        # TRANSLATOR: Wrap message to 80 columns
         printout(_("""\
 Notice: To enable the readonly wiki attribute, trac.ini must be manually
 edited to add ReadonlyWikiPolicy to the list of permission_policies in

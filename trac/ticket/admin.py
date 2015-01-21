@@ -15,9 +15,9 @@ from trac.admin.api import AdminCommandError, IAdminCommandProvider, \
                            IAdminPanelProvider, console_date_format, \
                            console_datetime_format, get_console_locale
 from trac.core import *
-from trac.perm import PermissionSystem
 from trac.resource import ResourceNotFound
 from trac.ticket import model
+from trac.ticket.api import TicketSystem
 from trac.ticket.roadmap import MilestoneModule
 from trac.util import getuser
 from trac.util.datefmt import format_date, format_datetime, \
@@ -35,6 +35,7 @@ class TicketAdminPanel(Component):
     
     _type = 'undefined'
     _label = N_("(Undefined)"), N_("(Undefined)")
+    _view_perms = ['TICKET_ADMIN']
 
     # i18n note: use gettext() whenever referring to the above as text labels,
     #            and don't use it whenever using them as field names (after
@@ -43,7 +44,8 @@ class TicketAdminPanel(Component):
     # IAdminPanelProvider methods
 
     def get_admin_panels(self, req):
-        if 'TICKET_ADMIN' in req.perm('admin', 'ticket/' + self._type):
+        if all(perm in req.perm('admin', 'ticket/' + self._type)
+               for perm in self._view_perms):
             yield ('ticket', _('Ticket System'), self._type,
                    gettext(self._label[1]))
 
@@ -88,7 +90,7 @@ class ComponentAdminPanel(TicketAdminPanel):
                     try:
                         comp.update()
                     except self.env.db_exc.IntegrityError:
-                        raise TracError(_('The component "%(name)s" already '
+                        raise TracError(_('Component "%(name)s" already '
                                           'exists.', name=name))
                     add_notice(req, _("Your changes have been saved."))
                     req.redirect(req.href.admin(cat, page))
@@ -118,8 +120,8 @@ class ComponentAdminPanel(TicketAdminPanel):
                     else:
                         if comp.name is None:
                             raise TracError(_("Invalid component name."))
-                        raise TracError(_("Component %(name)s already exists.",
-                                          name=name))
+                        raise TracError(_('Component "%(name)s" already '
+                                          'exists.', name=name))
 
                 # Remove components
                 elif req.args.get('remove'):
@@ -155,18 +157,10 @@ class ComponentAdminPanel(TicketAdminPanel):
                     'components': list(model.Component.select(self.env)),
                     'default': default}
 
-        if self.config.getbool('ticket', 'restrict_owner'):
-            perm = PermissionSystem(self.env)
-            def valid_owner(username):
-                return perm.get_user_permissions(username) \
-                           .get('TICKET_MODIFY')
-            data['owners'] = [username for username, name, email
-                              in self.env.get_known_users()
-                              if valid_owner(username)]
-            data['owners'].insert(0, '')
-            data['owners'].sort()
-        else:
-            data['owners'] = None
+        owners = TicketSystem(self.env).get_allowed_owners()
+        if owners is not None:
+            owners.insert(0, '')
+        data.update({'owners': owners})
 
         return 'admin_components.html', data
 
@@ -193,8 +187,7 @@ class ComponentAdminPanel(TicketAdminPanel):
         return [c.name for c in model.Component.select(self.env)]
 
     def get_user_list(self):
-        return [username for username, in
-                self.env.db_query("SELECT DISTINCT username FROM permission")]
+        return TicketSystem(self.env).get_allowed_owners()
 
     def _complete_add(self, args):
         if len(args) == 2:
@@ -239,12 +232,7 @@ class MilestoneAdminPanel(TicketAdminPanel):
 
     _type = 'milestones'
     _label = N_("Milestone"), N_("Milestones")
-
-    # IAdminPanelProvider methods
-
-    def get_admin_panels(self, req):
-        if 'MILESTONE_VIEW' in req.perm('admin', 'ticket/' + self._type):
-            return TicketAdminPanel.get_admin_panels(self, req)
+    _view_perms = TicketAdminPanel._view_perms + ['MILESTONE_VIEW']
 
     # TicketAdminPanel methods
 
@@ -304,7 +292,9 @@ class MilestoneAdminPanel(TicketAdminPanel):
                     with self.env.db_transaction:
                         for name in sel:
                             milestone = model.Milestone(self.env, name)
-                            milestone.delete(author=req.authname)
+                            milestone.move_tickets(None, req.authname,
+                                                   "Milestone deleted")
+                            milestone.delete()
                     add_notice(req, _("The selected milestones have been "
                                       "removed."))
                     req.redirect(req.href.admin(cat, page))
@@ -466,7 +456,7 @@ class VersionAdminPanel(TicketAdminPanel):
                     try:
                         ver.update()
                     except self.env.db_exc.IntegrityError:
-                        raise TracError(_('The version "%(name)s" already '
+                        raise TracError(_('Version "%(name)s" already '
                                           'exists.', name=name))
 
                     add_notice(req, _("Your changes have been saved."))
@@ -499,8 +489,8 @@ class VersionAdminPanel(TicketAdminPanel):
                     else:
                         if ver.name is None:
                             raise TracError(_("Invalid version name."))
-                        raise TracError(_("Version %(name)s already exists.",
-                                          name=name))
+                        raise TracError(_('Version "%(name)s" already '
+                                          'exists.', name=name))
 
                 # Remove versions
                 elif req.args.get('remove'):
@@ -511,8 +501,7 @@ class VersionAdminPanel(TicketAdminPanel):
                         sel = [sel]
                     with self.env.db_transaction:
                         for name in sel:
-                            ver = model.Version(self.env, name)
-                            ver.delete()
+                            model.Version(self.env, name).delete()
                     add_notice(req, _("The selected versions have been "
                                       "removed."))
                     req.redirect(req.href.admin(cat, page))
@@ -539,9 +528,7 @@ class VersionAdminPanel(TicketAdminPanel):
 
         Chrome(self.env).add_jquery_ui(req)
 
-        data.update({
-            'datetime_hint': get_datetime_format_hint(req.lc_time),
-        })
+        data.update({'datetime_hint': get_datetime_format_hint(req.lc_time)})
         return 'admin_versions.html', data
 
     # IAdminCommandProvider methods
@@ -727,8 +714,8 @@ class AbstractEnumAdminPanel(TicketAdminPanel):
 
                 # Clear default
                 elif req.args.get('clear'):
-                    self.log.info("Clearing default %s" % self._type)
-                    self.config.set('ticket', 'default_%s' % self._type, '')
+                    self.log.info("Clearing default %s", self._type)
+                    self.config.set('ticket', 'default_%s', self._type, '')
                     self._save_config(req)
                     req.redirect(req.href.admin(cat, page))
 

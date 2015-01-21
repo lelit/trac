@@ -21,7 +21,7 @@ import re
 
 from genshi.builder import tag
 
-from trac.attachment import AttachmentModule
+from trac.attachment import AttachmentModule, Attachment
 from trac.config import IntOption
 from trac.core import *
 from trac.mimeview.api import IContentConverter, Mimeview
@@ -52,8 +52,10 @@ class WikiModule(Component):
 
     page_manipulators = ExtensionPoint(IWikiPageManipulator)
 
+    realm = WikiSystem.realm
+
     max_size = IntOption('wiki', 'max_size', 262144,
-        """Maximum allowed wiki page size in characters. (''since 0.11.2'')""")
+        """Maximum allowed wiki page size in characters.""")
 
     PAGE_TEMPLATES_PREFIX = 'PageTemplates/'
     DEFAULT_PAGE_TEMPLATE = 'DefaultPage'
@@ -73,10 +75,10 @@ class WikiModule(Component):
         return 'wiki'
 
     def get_navigation_items(self, req):
-        if 'WIKI_VIEW' in req.perm('wiki', 'WikiStart'):
+        if 'WIKI_VIEW' in req.perm(self.realm, 'WikiStart'):
             yield ('mainnav', 'wiki',
                    tag.a(_("Wiki"), href=req.href.wiki(), accesskey=1))
-        if 'WIKI_VIEW' in req.perm('wiki', 'TracGuide'):
+        if 'WIKI_VIEW' in req.perm(self.realm, 'TracGuide'):
             yield ('metanav', 'help',
                    tag.a(_("Help/Guide"), href=req.href.wiki('TracGuide'),
                          accesskey=6))
@@ -148,6 +150,8 @@ class WikiModule(Component):
                 else:
                     return self._render_editor(req, page, action,
                                                has_collision)
+            elif action == 'edit_comment':
+                self._do_edit_comment(req, versioned_page)
             elif action == 'delete':
                 self._do_delete(req, versioned_page)
             elif action == 'rename':
@@ -165,6 +169,8 @@ class WikiModule(Component):
             return self._render_confirm_rename(req, page)
         elif action == 'edit':
             return self._render_editor(req, page)
+        elif action == 'edit_comment':
+            return self._render_edit_comment(req, versioned_page)
         elif action == 'diff':
             return self._render_diff(req, versioned_page)
         elif action == 'history':
@@ -245,6 +251,20 @@ class WikiModule(Component):
         add_stylesheet(req, 'common/css/diff.css')
         add_script(req, 'common/js/diff.js')
         return diff_data, changes
+
+    def _do_edit_comment(self, req, page):
+        req.perm(page.resource).require('WIKI_ADMIN')
+        
+        if 'cancel' in req.args:
+            req.redirect(req.href.wiki(page.name, action='history'))
+        
+        new_comment = req.args.get('new_comment')
+
+        page.edit_comment(new_comment)
+        add_notice(req, _("The comment of version %(version)s of the page "
+                          "%(name)s has been updated.",
+                          version=page.version, name=page.name))
+        req.redirect(req.href.wiki(page.name, action='history'))
 
     def _do_delete(self, req, page):
         req.perm(page.resource).require('WIKI_DELETE')
@@ -372,9 +392,12 @@ class WikiModule(Component):
             old_date = t
 
         data = self._page_data(req, page, 'delete')
-        data.update({'what': what, 'new_version': None, 'old_version': None,
-                     'num_versions': num_versions, 'new_date': new_date,
-                     'old_date': old_date})
+        attachments = Attachment.select(self.env, self.realm, page.name)
+        data.update({
+            'what': what, 'new_version': None, 'old_version': None,
+            'num_versions': num_versions, 'new_date': new_date,
+            'old_date': old_date, 'attachments': list(attachments),
+        })
         if version is not None:
             data.update({'new_version': version, 'old_version': old_version})
         self._wiki_ctxtnav(req, page)
@@ -497,7 +520,7 @@ class WikiModule(Component):
             page.readonly = 'readonly' in req.args
 
         author = get_reporter_id(req, 'author')
-        defaults = {'editrows': 20}
+        defaults = {'editrows': '20'}
         prefs = dict((key, req.session.get('wiki_%s' % key, defaults.get(key)))
                      for key in ('editrows', 'sidebyside'))
 
@@ -552,6 +575,12 @@ class WikiModule(Component):
         add_script(req, 'common/js/folding.js')
         return 'wiki_edit.html', data, None
 
+    def _render_edit_comment(self, req, page):
+        req.perm(page.resource).require('WIKI_ADMIN')
+        data = self._page_data(req, page, 'edit_comment')
+        self._wiki_ctxtnav(req, page)
+        return 'wiki_edit_comment.html', data, None
+
     def _render_history(self, req, page):
         """Extract the complete history for a given page.
 
@@ -572,7 +601,11 @@ class WikiModule(Component):
                 'comment': comment,
                 'ipnr': ipnr
             })
-        data.update({'history': history, 'resource': page.resource})
+        data.update({
+            'history': history,
+            'resource': page.resource,
+            'can_edit_comment': 'WIKI_ADMIN' in req.perm(page.resource)
+        })
         add_ctxtnav(req, _("Back to %(wikipage)s", wikipage=page.name),
                     req.href.wiki(page.name))
         return 'history_view.html', data, None
@@ -585,9 +618,9 @@ class WikiModule(Component):
             for conversion in Mimeview(self.env) \
                               .get_supported_conversions('text/x-trac-wiki'):
                 conversion_href = req.href.wiki(page.name, version=version,
-                                                format=conversion[0])
-                add_link(req, 'alternate', conversion_href, conversion[1],
-                         conversion[3])
+                                                format=conversion.key)
+                add_link(req, 'alternate', conversion_href, conversion.name,
+                         conversion.in_mimetype)
 
         data = self._page_data(req, page)
         if page.name == 'WikiStart':
@@ -613,7 +646,7 @@ class WikiModule(Component):
             name = name.lower()
             related = [each for each in ws.pages
                        if name in each.lower()
-                          and 'WIKI_VIEW' in req.perm('wiki', each)]
+                          and 'WIKI_VIEW' in req.perm(self.realm, each)]
             related.sort()
             related = [ws._format_link(formatter, 'wiki', '/' + each, each,
                                        False)
@@ -640,7 +673,7 @@ class WikiModule(Component):
         prefix = self.PAGE_TEMPLATES_PREFIX
         templates = [template[len(prefix):]
                      for template in ws.get_pages(prefix)
-                     if 'WIKI_VIEW' in req.perm('wiki', template)]
+                     if 'WIKI_VIEW' in req.perm(self.realm, template)]
 
         # -- prev/up/next links
         if prev_version:
@@ -707,7 +740,7 @@ class WikiModule(Component):
 
     def get_timeline_events(self, req, start, stop, filters):
         if 'wiki' in filters:
-            wiki_realm = Resource('wiki')
+            wiki_realm = Resource(self.realm)
             for ts, name, comment, author, version in self.env.db_query("""
                     SELECT time, name, comment, author, version FROM wiki
                     WHERE time>=%s AND time<=%s
@@ -755,7 +788,7 @@ class WikiModule(Component):
         with self.env.db_query as db:
             sql_query, args = search_to_sql(db, ['w1.name', 'w1.author',
                                                  'w1.text'], terms)
-            wiki_realm = Resource('wiki')
+            wiki_realm = Resource(self.realm)
             for name, ts, author, text in db("""
                     SELECT w1.name, w1.time, w1.author, w1.text
                     FROM wiki w1,(SELECT name, max(version) AS ver
@@ -781,10 +814,12 @@ class ReadonlyWikiPolicy(Component):
 
     implements(IPermissionPolicy)
 
+    realm = WikiSystem.realm
+
     # IPermissionPolicy methods
 
     def check_permission(self, action, username, resource, perm):
-        if resource and resource.realm == 'wiki' and \
+        if resource and resource.realm == self.realm and \
                 action in ('WIKI_DELETE', 'WIKI_MODIFY', 'WIKI_RENAME'):
             page = WikiPage(self.env, resource)
             if page.readonly and 'WIKI_ADMIN' not in perm(resource):

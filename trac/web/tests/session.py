@@ -508,6 +508,32 @@ class SessionTestCase(unittest.TestCase):
             WHERE sid='john' AND name='foo'
             """)[0][0])
 
+    def test_session_set_email(self):
+        """Setting session email invalidates known_users cache."""
+        session = DetachedSession(self.env, 'user')
+        session['email'] = 'user@domain.org'
+
+        self.assertEqual([], list(self.env.get_known_users()))
+        session.save()
+        email = None
+        for sid, name, email in self.env.get_known_users():
+            if sid == 'user':
+                break
+        self.assertEqual(session['email'], email)
+
+    def test_session_set_name(self):
+        """Setting session name invalidates known_users cache."""
+        session = DetachedSession(self.env, 'user')
+        session['name'] = 'The User'
+
+        self.assertEqual([], list(self.env.get_known_users()))
+        session.save()
+        name = None
+        for sid, name, email in self.env.get_known_users():
+            if sid == 'user':
+                break
+        self.assertEqual(session['name'], name)
+
     def test_session_admin_list(self):
         auth_list, anon_list, all_list = _prep_session_table(self.env)
         sess_admin = SessionAdmin(self.env)
@@ -529,45 +555,73 @@ class SessionTestCase(unittest.TestCase):
                          all_list[:3])
 
     def test_session_admin_add(self):
-        auth_list, anon_list, all_list = _prep_session_table(self.env)
+        _prep_session_table(self.env)
         sess_admin = SessionAdmin(self.env)
+
         self.assertRaises(Exception, sess_admin._do_add, 'name00')
+
         sess_admin._do_add('john')
         result = get_session_info(self.env, 'john')
         self.assertEqual(result, ('john', None, None, None))
+        self.assertIn(('john', None, None),
+                      list(self.env.get_known_users()))
+
         sess_admin._do_add('john1', 'John1')
         result = get_session_info(self.env, 'john1')
         self.assertEqual(result, ('john1', 'John1', None, None))
+        self.assertIn(('john1', 'John1', None),
+                      list(self.env.get_known_users()))
+
         sess_admin._do_add('john2', 'John2', 'john2@example.org')
         result = get_session_info(self.env, 'john2')
         self.assertEqual(result,
-                         ('john2', 'John2', 'john2@example.org',None))
+                         ('john2', 'John2', 'john2@example.org', None))
+        self.assertIn(('john2', 'John2', 'john2@example.org'),
+                      list(self.env.get_known_users()))
 
     def test_session_admin_set(self):
-        auth_list, anon_list, all_list = _prep_session_table(self.env)
+        _prep_session_table(self.env)
         sess_admin = SessionAdmin(self.env)
+
         self.assertRaises(TracError, sess_admin._do_set, 'name', 'nothere',
                           'foo')
+
+        self.env.get_known_users()  # Prep the cache
+        self.assertIn(('name00', 'val00', 'val00'),
+                      list(self.env.get_known_users()))
         sess_admin._do_set('name', 'name00', 'john')
         result = get_session_info(self.env, 'name00')
         self.assertEqual(result, ('name00', 'john', 'val00', None))
+        self.assertIn(('name00', 'john', 'val00'),
+                      list(self.env.get_known_users()))
+
         sess_admin._do_set('email', 'name00', 'john@example.org')
         result = get_session_info(self.env, 'name00')
         self.assertEqual(result, ('name00', 'john', 'john@example.org', None))
+        self.assertIn(('name00', 'john', 'john@example.org'),
+                      list(self.env.get_known_users()))
+
         sess_admin._do_set('default_handler', 'name00', 'SearchModule')
         result = get_session_info(self.env, 'name00')
         self.assertEqual(result, ('name00', 'john', 'john@example.org',
                                   'SearchModule'))
 
     def test_session_admin_delete(self):
-        auth_list, anon_list, all_list = _prep_session_table(self.env)
+        _prep_session_table(self.env)
         sess_admin = SessionAdmin(self.env)
+
+        self.assertIn(('name00', 'val00', 'val00'),
+                      list(self.env.get_known_users()))
         sess_admin._do_delete('name00')
         result = get_session_info(self.env, 'name00')
         self.assertEqual(result, (None, None, None, None))
+        self.assertNotIn(('name00', 'val00', 'val00'),
+                         list(self.env.get_known_users()))
+
         sess_admin._do_delete('nothere')
         result = get_session_info(self.env, 'nothere')
         self.assertEqual(result, (None, None, None, None))
+
         auth_list, anon_list, all_list = _prep_session_table(self.env)
         sess_admin._do_delete('anonymous')
         result = [i for i in sess_admin._get_list(['*'])]
@@ -597,6 +651,24 @@ class SessionTestCase(unittest.TestCase):
         self.assertEqual([], rows)
         result = get_session_info(self.env, anon_list[1][0])
         self.assertEqual(result, ('name11', 'val11', 'val11', None))
+
+    def test_session_change_id_with_invalid_sid(self):
+        cookie = Cookie()
+        req = Mock(incookie=Cookie(), outcookie=cookie, authname='anonymous',
+                   base_path='/')
+        session = Session(self.env, req)
+        session.change_sid('0123456789')
+        self.assertEqual('0123456789', session.sid)
+        session.change_sid('abcxyz')
+        self.assertEqual('abcxyz', session.sid)
+        session.change_sid('abc123xyz')
+        self.assertEqual('abc123xyz', session.sid)
+        self.assertRaises(TracError, session.change_sid, 'abc 123 xyz')
+        self.assertRaises(TracError, session.change_sid, 'abc-123-xyz')
+        self.assertRaises(TracError, session.change_sid, 'abc<i>123</i>xyz')
+        self.assertRaises(TracError, session.change_sid, u'abc123xÿz')
+        self.assertRaises(TracError, session.change_sid,
+                          u'abc¹₂³xyz')  # Unicode digits
 
 
 def suite():

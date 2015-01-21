@@ -22,22 +22,22 @@ import re
 from genshi.builder import tag
 
 from trac import __version__
-from trac.attachment import AttachmentModule
+from trac.attachment import Attachment, AttachmentModule
 from trac.config import ConfigSection, ExtensionOption, Option
 from trac.core import *
+from trac.notification.api import NotificationSystem
 from trac.perm import IPermissionRequestor
 from trac.resource import *
 from trac.search import ISearchSource, search_to_regexps, shorten_result
-from trac.util import as_bool
+from trac.util import as_bool, partition
 from trac.util.datefmt import parse_date, utc, pretty_timedelta, to_datetime, \
                               get_datetime_format_hint, format_date, \
                               format_datetime, from_utimestamp, user_time
 from trac.util.text import CRLF, exception_to_unicode, to_unicode
 from trac.util.translation import _, tag_
 from trac.ticket.api import TicketSystem
-from trac.ticket.batch import BatchTicketNotifyEmail
-from trac.ticket.model import Milestone, MilestoneCache, Ticket, \
-                              group_milestones
+from trac.ticket.notification import BatchTicketChangeEvent
+from trac.ticket.model import Milestone, MilestoneCache, Ticket
 from trac.timeline.api import ITimelineEventProvider
 from trac.web import IRequestHandler, RequestDone
 from trac.web.chrome import (Chrome, INavigationContributor,
@@ -197,8 +197,7 @@ class DefaultTicketGroupStatsProvider(Component):
         CSS rule: `table.progress td.<class> { background: <color> }`
         to a [TracInterfaceCustomization#SiteAppearance site/style.css] file
         for example.
-
-        (''since 0.11'')""")
+        """)
 
     default_milestone_groups =  [
         {'name': 'closed', 'status': 'closed',
@@ -379,6 +378,23 @@ def grouped_stats_data(env, stats_provider, tickets, by, per_group_stats_data):
             percent = float(gstat.count) / float(max_count) * 100
         gs_dict['percent_of_max_total'] = percent
     return data
+
+
+def group_milestones(milestones, include_completed):
+    """Group milestones into "open with due date", "open with no due date",
+    and possibly "completed". Return a list of (label, milestones) tuples."""
+    def category(m):
+        return 1 if m.is_completed else 2 if m.due else 3
+    open_due_milestones, open_not_due_milestones, \
+        closed_milestones = partition([(m, category(m))
+                                       for m in milestones], (2, 3, 1))
+    groups = [
+        (_("Open (by due date)"), open_due_milestones),
+        (_("Open (no due date)"), open_not_due_milestones),
+    ]
+    if include_completed:
+        groups.append((_('Closed'), closed_milestones))
+    return groups
 
 
 class RoadmapModule(Component):
@@ -588,6 +604,8 @@ class MilestoneModule(Component):
                IResourceManager, ISearchSource, ITimelineEventProvider,
                IWikiSyntaxProvider)
 
+    realm = 'milestone'
+
     stats_provider = ExtensionOption('milestone', 'stats_provider',
                                      ITicketGroupStatsProvider,
                                      'DefaultTicketGroupStatsProvider',
@@ -622,7 +640,7 @@ class MilestoneModule(Component):
 
     def get_timeline_events(self, req, start, stop, filters):
         if 'milestone' in filters:
-            milestone_realm = Resource('milestone')
+            milestone_realm = Resource(self.realm)
             for name, due, completed, description \
                     in MilestoneCache(self.env).milestones.itervalues():
                 if completed and start <= completed <= stop:
@@ -660,7 +678,7 @@ class MilestoneModule(Component):
 
     def process_request(self, req):
         milestone_id = req.args.get('id')
-        req.perm('milestone', milestone_id).require('MILESTONE_VIEW')
+        req.perm(self.realm, milestone_id).require('MILESTONE_VIEW')
 
         add_link(req, 'up', req.href.roadmap(), _('Roadmap'))
 
@@ -668,7 +686,7 @@ class MilestoneModule(Component):
         try:
             milestone = Milestone(self.env, milestone_id)
         except ResourceNotFound:
-            if 'MILESTONE_CREATE' not in req.perm('milestone', milestone_id):
+            if 'MILESTONE_CREATE' not in req.perm(self.realm, milestone_id):
                 raise
             milestone = Milestone(self.env)
             milestone.name = milestone_id
@@ -774,10 +792,11 @@ class MilestoneModule(Component):
                 new_values = {'milestone': retarget_to}
                 comment = comment or \
                           _("Open tickets retargeted after milestone closed")
-                tn = BatchTicketNotifyEmail(self.env)
+                event = BatchTicketChangeEvent(retargeted_tickets, None,
+                                               req.authname, comment,
+                                               new_values, None)
                 try:
-                    tn.notify(retargeted_tickets, new_values, comment, None,
-                              req.authname)
+                    NotificationSystem(self.env).notify(event)
                 except Exception as e:
                     self.log.error("Failure sending notification on ticket "
                                    "batch change: %s",
@@ -826,10 +845,11 @@ class MilestoneModule(Component):
                               retarget=retarget_to))
             new_values = {'milestone': retarget_to}
             comment = _("Tickets retargeted after milestone deleted")
-            tn = BatchTicketNotifyEmail(self.env)
+            event = BatchTicketChangeEvent(retargeted_tickets, None,
+                                           req.authname, comment, new_values,
+                                           None)
             try:
-                tn.notify(retargeted_tickets, new_values, comment, None,
-                          req.authname)
+                NotificationSystem(self.env).notify(event)
             except Exception as e:
                 self.log.error("Failure sending notification on ticket batch "
                                "change: %s", exception_to_unicode(e))
@@ -857,12 +877,14 @@ class MilestoneModule(Component):
         milestones = [m for m in Milestone.select(self.env)
                       if m.name != milestone.name
                       and 'MILESTONE_VIEW' in req.perm(m.resource)]
+        attachments = Attachment.select(self.env, self.realm, milestone.name)
         data = {
             'milestone': milestone,
             'milestone_groups': group_milestones(milestones,
                 'TICKET_ADMIN' in req.perm),
             'num_tickets': milestone.get_num_tickets(),
-            'retarget_to': self.default_retarget_to
+            'retarget_to': self.default_retarget_to,
+            'attachments': list(attachments)
         }
         add_stylesheet(req, 'common/css/roadmap.css')
         return 'milestone_delete.html', data, None
@@ -1016,7 +1038,7 @@ class MilestoneModule(Component):
                 closed = 'closed ' if milestone.is_completed else ''
                 return tag.a(label, class_='%smilestone' % closed,
                              href=href + extra, title=title)
-        elif 'MILESTONE_CREATE' in context.perm('milestone', name):
+        elif 'MILESTONE_CREATE' in context.perm(self.realm, name):
             return tag.a(label, class_='missing milestone', href=href + extra,
                          rel='nofollow')
         return tag.a(label, class_='missing milestone')
@@ -1024,7 +1046,7 @@ class MilestoneModule(Component):
     # IResourceManager methods
 
     def get_resource_realms(self):
-        yield 'milestone'
+        yield self.realm
 
     def get_resource_description(self, resource, format=None, context=None,
                                  **kwargs):
@@ -1062,7 +1084,7 @@ class MilestoneModule(Component):
         if not 'milestone' in filters:
             return
         term_regexps = search_to_regexps(terms)
-        milestone_realm = Resource('milestone')
+        milestone_realm = Resource(self.realm)
         for name, due, completed, description \
                 in MilestoneCache(self.env).milestones.itervalues():
             if all(r.search(description) or r.search(name)

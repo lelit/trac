@@ -43,9 +43,11 @@ class LogModule(Component):
     implements(INavigationContributor, IPermissionRequestor, IRequestHandler,
                IWikiSyntaxProvider)
 
+    realm = RepositoryManager.changeset_realm
+
     default_log_limit = IntOption('revisionlog', 'default_log_limit', 100,
         """Default value for the limit argument in the TracRevisionLog.
-        (''since 0.11'')""")
+        """)
 
     graph_colors = ListOption('revisionlog', 'graph_colors',
         ['#cc0', '#0c0', '#0cc', '#00c', '#c0c', '#c00'],
@@ -121,7 +123,7 @@ class LogModule(Component):
         #    unless explicit ranges have been specified
         #  * for ''show only add, delete'' we're using
         #   `Repository.get_path_history()`
-        cset_resource = repos.resource.child('changeset')
+        cset_resource = repos.resource.child(self.realm)
         show_graph = False
         if mode == 'path_history':
             def history():

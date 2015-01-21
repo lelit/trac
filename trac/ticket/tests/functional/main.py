@@ -313,8 +313,7 @@ class TestTicketQueryLinks(FunctionalTwillTestCaseSetup):
     def runTest(self):
         """Test ticket query links"""
         count = 3
-        ticket_ids = [self._tester.create_ticket(
-                        summary='TestTicketQueryLinks%s' % i)
+        ticket_ids = [self._tester.create_ticket('TestTicketQueryLinks%s' % i)
                       for i in range(count)]
         self._tester.go_to_query()
         # We don't have the luxury of javascript, so this is a multi-step
@@ -1349,7 +1348,7 @@ class TestAdminVersionDuplicates(FunctionalTwillTestCaseSetup):
         tc.formvalue('addversion', 'name', name)
         tc.submit()
         tc.notfind(internal_error)
-        tc.find("Version %s already exists." % name)
+        tc.find('Version "%s" already exists.' % name)
 
 
 class TestAdminVersionDetail(FunctionalTwillTestCaseSetup):
@@ -1671,7 +1670,7 @@ class TestMilestoneDelete(FunctionalTwillTestCaseSetup):
         """Delete a milestone and verify that tickets are retargeted
         to the selected milestone."""
         def submit_delete(name, retarget_to=None, tid=None):
-            tc.submit('delete', formname='edit')
+            tc.submit('delete', 'delete-confirm')
             tc.url(self._tester.url + '/roadmap')
             tc.find('The milestone "%s" has been deleted.' % name)
             tc.notfind('Milestone:.*%s' % name)
@@ -1722,7 +1721,7 @@ class TestMilestoneDelete(FunctionalTwillTestCaseSetup):
         tid = self._tester.create_ticket(info={'milestone': name})
         self._tester.go_to_milestone(name)
         tc.submit(formname='deletemilestone')
-        tc.formvalue('edit', 'target', retarget_to)
+        tc.formvalue('delete-confirm', 'target', retarget_to)
         submit_delete(name, retarget_to, tid)
 
         # Just navigate to the page and select cancel
@@ -1730,7 +1729,7 @@ class TestMilestoneDelete(FunctionalTwillTestCaseSetup):
         tid = self._tester.create_ticket(info={'milestone': name})
         self._tester.go_to_milestone(name)
         tc.submit(formname='deletemilestone')
-        tc.submit('cancel', formname='edit')
+        tc.submit('cancel', 'delete-confirm')
 
         tc.url(self._tester.url + '/milestone/%s' % name)
         tc.notfind('The milestone "%s" has been deleted.' % name)
@@ -1742,6 +1741,28 @@ class TestMilestoneDelete(FunctionalTwillTestCaseSetup):
         tc.notfind('<strong class="trac-field-milestone">Milestone</strong>'
                    '[ \t\n]*<em>%s</em>[ \t\n]*deleted' % name)
         tc.notfind("Ticket retargeted after milestone deleted<br />")
+
+        # No attachments associated with milestone
+        name = self._tester.create_milestone()
+        self._tester.go_to_milestone(name)
+        tc.formvalue('deletemilestone', 'action', 'delete')
+        tc.submit()
+        tc.notfind("The following attachments will also be deleted:")
+        tc.submit('delete', 'delete-confirm')
+        tc.find('The milestone "%s" has been deleted.' % name)
+        tc.url(self._tester.url)
+
+        # Attachments associated with milestone
+        name = self._tester.create_milestone()
+        filename = self._tester.attach_file_to_milestone(name)
+        self._tester.go_to_milestone(name)
+        tc.formvalue('deletemilestone', 'action', 'delete')
+        tc.submit()
+        tc.find("The following attachments will also be deleted:")
+        tc.find(filename)
+        tc.submit('delete', 'delete-confirm')
+        tc.find('The milestone "%s" has been deleted.' % name)
+        tc.url(self._tester.url)
 
 
 class TestMilestoneRename(FunctionalTwillTestCaseSetup):
@@ -1803,7 +1824,7 @@ class RegressionTestTicket4447(FunctionalTwillTestCaseSetup):
                        'Another Custom Field')
         env.config.save()
 
-        ticketid = self._tester.create_ticket(summary="Hello World")
+        ticketid = self._tester.create_ticket("Hello World")
         self._tester.add_comment(ticketid)
         tc.notfind('<strong class="trac-field-newfield">Another Custom Field'
                    '</strong>[ \t\n]+<em></em>[ \t\n]+deleted')
@@ -1859,7 +1880,7 @@ class RegressionTestTicket5022(FunctionalTwillTestCaseSetup):
         """Test for regression of http://trac.edgewall.org/ticket/5022
         """
         summary = 'RegressionTestTicket5022'
-        ticket_id = self._tester.create_ticket(summary=summary)
+        ticket_id = self._tester.create_ticket(summary)
         tc.go(self._tester.url + '/newticket?id=%s' % ticket_id)
         tc.notfind(summary)
 
@@ -2072,13 +2093,13 @@ class RegressionTestTicket6048(FunctionalTwillTestCaseSetup):
         env.config.set('ticket', 'workflow',
                        prevconfig + ',DeleteTicketActionController')
         env.config.save()
-        env = self._testenv.get_trac_environment() # reload environment
+        env = self._testenv.get_trac_environment()  # reload environment
 
         # Create a ticket and delete it
         ticket_id = self._tester.create_ticket('RegressionTestTicket6048')
         # (Create a second ticket so that the ticket id does not get reused
         # and confuse the tester object.)
-        self._tester.create_ticket(summary='RegressionTestTicket6048b')
+        self._tester.create_ticket('RegressionTestTicket6048b')
         self._tester.go_to_ticket(ticket_id)
         tc.find('delete ticket')
         tc.formvalue('propertyform', 'action', 'delete')
@@ -2091,7 +2112,7 @@ class RegressionTestTicket6048(FunctionalTwillTestCaseSetup):
         # Remove the DeleteTicket plugin
         env.config.set('ticket', 'workflow', prevconfig)
         env.config.save()
-        env = self._testenv.get_trac_environment() # reload environment
+        self._testenv.get_trac_environment()  # reload environment
         for ext in ('py', 'pyc', 'pyo'):
             filename = os.path.join(self._testenv.tracdir, 'plugins',
                                     'DeleteTicket.%s' % ext)
@@ -2402,9 +2423,7 @@ class RegressionTestTicket10772(FunctionalTestCaseSetup):
             tc.formvalue('enumtable', 'default', 'major')
             tc.submit('apply')
 
-            self._tester.go_to_ticket()
-            tc.formvalue('propertyform', 'field-summary', 'ticket summary')
-            tc.submit('submit')
+            self._tester.create_ticket('ticket summary')
 
             find_prop('component')
             find_prop('milestone')
@@ -2424,14 +2443,11 @@ class RegressionTestTicket10772(FunctionalTestCaseSetup):
             self._tester.go_to_admin("Versions")
             tc.formvalue('version_table', 'default', '2.0')
             tc.submit('apply')
-            self._tester.go_to_ticket()
             self._tester.go_to_admin("Ticket Types")
             tc.formvalue('enumtable', 'default', 'task')
             tc.submit('apply')
 
-            self._tester.go_to_ticket()
-            tc.formvalue('propertyform', 'field-summary', 'ticket summary')
-            tc.submit('submit')
+            self._tester.create_ticket('ticket summary')
 
             find_prop('component', 'component2')
             find_prop('milestone', 'milestone2')
@@ -2440,6 +2456,39 @@ class RegressionTestTicket10772(FunctionalTestCaseSetup):
             find_prop('type', 'task')
         finally:
             self._testenv.remove_config('ticket', 'optional_fields')
+
+
+class RegressionTestTicket10984(FunctionalTwillTestCaseSetup):
+    def runTest(self):
+        """Test for regression of http://trac.edgewall.org/ticket/10984
+        The milestone field should be hidden from the newticket, ticket
+        and query forms when the user doesn't have MILESTONE_VIEW.
+        """
+        # Check that user with MILESTONE_VIEW can set and view the field
+        self._tester.go_to_ticket()
+        tc.find('<label for="field-milestone">Milestone:</label>')
+        ticketid = self._tester.create_ticket(info={'milestone': 'milestone1'})
+        self._tester.go_to_ticket(ticketid)
+        tc.find(r'<label for="field-milestone">Milestone:</label>')
+        tc.find(r'<option selected="selected" value="milestone1">')
+
+        # Check that anonymous user w/o MILESTONE_VIEW doesn't see the field
+        self._testenv.revoke_perm('anonymous', 'MILESTONE_VIEW')
+        self._testenv.grant_perm('anonymous', 'TICKET_CREATE')
+        self._testenv.grant_perm('anonymous', 'TICKET_MODIFY')
+        self._tester.logout()
+        try:
+            self._tester.go_to_ticket()
+            tc.notfind(r'<label for="field-milestone">Milestone:</label>')
+            tc.notfind(r'<select id="field-milestone"')
+            self._tester.go_to_ticket(ticketid)
+            tc.notfind(r'<label for="field-milestone">Milestone:</label>')
+            tc.notfind(r'<select id="field-milestone"')
+        finally:
+            self._tester.login('admin')
+            self._testenv.revoke_perm('anonymous', 'TICKET_CREATE')
+            self._testenv.revoke_perm('anonymous', 'TICKET_MODIFY')
+            self._testenv.grant_perm('anonymous', 'MILESTONE_VIEW')
 
 
 class RegressionTestTicket11028(FunctionalTwillTestCaseSetup):
@@ -2472,55 +2521,6 @@ class RegressionTestTicket11028(FunctionalTwillTestCaseSetup):
             self._tester.login('admin')
             self._testenv.grant_perm('anonymous',
                                      ('ROADMAP_VIEW', 'MILESTONE_VIEW'))
-
-
-class RegressionTestTicket11152(FunctionalTwillTestCaseSetup):
-    def runTest(self):
-        """Test for regression of http://trac.edgewall.org/ticket/11152"""
-        # Check that "View Tickets" mainnav entry links to the report page
-        self._tester.go_to_view_tickets()
-
-        # Check that "View Tickets" mainnav entry links to the query page
-        # when the user doesn't have REPORT_VIEW, and that the mainnav entry
-        # is not present when the user doesn't have TICKET_VIEW.
-        try:
-            self._tester.logout()
-            self._testenv.revoke_perm('anonymous', 'REPORT_VIEW')
-            self._tester.go_to_view_tickets('query')
-
-            self._testenv.revoke_perm('anonymous', 'TICKET_VIEW')
-            self._tester.go_to_front()
-            tc.notfind('\\bView Tickets\\b')
-        finally:
-            self._testenv.grant_perm('anonymous',
-                                     ('REPORT_VIEW', 'TICKET_VIEW'))
-            self._tester.login('admin')
-
-        # Disable the ReportModule component and check that "View Tickets"
-        # mainnav entry links to the `/query` page.
-        env = self._testenv.get_trac_environment()
-        env.config.set('components', 'trac.ticket.report.ReportModule',
-                       'disabled')
-        env.config.save()
-
-        try:
-            self._tester.go_to_view_tickets('query')
-        finally:
-            env.config.remove('components', 'trac.ticket.report.ReportModule')
-            env.config.save()
-
-        # Disable the QueryModule component and check that "View Tickets"
-        # mainnav entry links to the `/report` page
-        env.config.set('components', 'trac.ticket.query.QueryModule',
-                       'disabled')
-        env.config.save()
-
-        try:
-            self._tester.go_to_view_tickets('report')
-            tc.notfind('<li class="last first">Available Reports</li>')
-        finally:
-            env.config.remove('components', 'trac.ticket.query.QueryModule')
-            env.config.save()
 
 
 class RegressionTestTicket11176(FunctionalTestCaseSetup):
@@ -2737,8 +2737,8 @@ def functionalSuite(suite=None):
     suite.addTest(RegressionTestTicket9981())
     suite.addTest(RegressionTestTicket10010())
     suite.addTest(RegressionTestTicket10772())
+    suite.addTest(RegressionTestTicket10984())
     suite.addTest(RegressionTestTicket11028())
-    suite.addTest(RegressionTestTicket11152())
     suite.addTest(RegressionTestTicket11590())
     suite.addTest(RegressionTestTicket11618())
     if ConfigObj:

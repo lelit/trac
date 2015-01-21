@@ -172,7 +172,6 @@ class WikiTestCase(unittest.TestCase):
         self.env.config.set('intertrac', 'th.title', "Trac Hacks")
         self.env.config.set('intertrac', 'th.url',
                             "http://trac-hacks.org")
-        self.env.config.set('intertrac', 'th.compat', 'false')
         # -- safe schemes
         self.env.config.set('wiki', 'safe_schemes',
                             'file,ftp,http,https,svn,svn+ssh,'
@@ -311,5 +310,5 @@ def suite(data=None, setup=None, file=__file__, teardown=None, context=None):
                 print('no ' + testfile)
     return suite
 
-if __name__ == '__main__':
+if __name__ == '__main__': # pragma: no cover
     unittest.main(defaultTest='suite')

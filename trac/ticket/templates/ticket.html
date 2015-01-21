@@ -28,15 +28,6 @@
       jQuery(document).ready(function($) {
         $("div.description").find("h1,h2,h3,h4,h5,h6").addAnchor(_("Link to this section"));
         $(".foldable").enableFolding(false, true);
-      <py:when test="ticket.exists">/*<![CDATA[*/
-        $("#attachments").toggleClass("collapsed");
-        $("#trac-up-attachments").click(function () {
-          $("#attachments").removeClass("collapsed");
-          return true;
-        });
-        $("#modify").parent().toggleClass("collapsed");
-        $(".trac-topnav a").click(function() { $("#modify").parent().removeClass("collapsed"); });
-
         /* only enable control elements for the currently selected action */
         var actions = $("#action input[name='action']");
 
@@ -48,6 +39,14 @@
         }
         actions.click(updateActionFields);
         updateActionFields();
+      <py:when test="ticket.exists">/*<![CDATA[*/
+        $("#attachments").toggleClass("collapsed");
+        $("#trac-up-attachments").click(function () {
+          $("#attachments").removeClass("collapsed");
+          return true;
+        });
+        $("#modify").parent().toggleClass("collapsed");
+        $(".trac-topnav a").click(function() { $("#modify").parent().removeClass("collapsed"); });
 
         function setRevertHandler() {
           $("button.trac-revert").click(function() {
@@ -84,8 +83,8 @@
           if (!$('#trac-comments-oldest').checked())
             $('#trac-comments-oldest').click().change();
           $("#changelog").replaceWith(items.filter("#changelog"));
-          if ($('#trac-comments-only-toggle').attr('checked'))
-            $('#trac-comments-only-toggle').click().attr('checked', true);
+          if (!$('#trac-show-property-changes-toggle').attr('checked'))
+            $('#trac-show-property-changes-toggle').click().attr('checked', false);
           // Show warning
           var new_changes = $("#changelog .trac-new");
           $("#trac-edit-warning").toggle(new_changes.length != 0);
@@ -98,9 +97,8 @@
           var show_preview = preview.children().length != 0;
           $("#ticketchange").toggle(show_preview);
           setRevertHandler();
-          // Collapse property form if comment editor has focus
-          if (show_preview && comment_focused)
-            $("#modify").parent().addClass("collapsed");
+          // Execute scripts to load stylesheets
+          items.filter("script").appendTo("head");
         }, "#ticketchange .trac-loading");
         $("#trac-comment-editor").autoSubmit({preview_comment: '1'}, function(data, reply) {
           var comment = $("#trac-comment-editor").next("div.comment").html(reply);
@@ -162,8 +160,8 @@
                 </span>
               </div>
               <div>
-                <input id="trac-comments-only-toggle" type="checkbox" />
-                <label for="trac-comments-only-toggle">Comments only</label>
+                <input id="trac-show-property-changes-toggle" type="checkbox" />
+                <label for="trac-show-property-changes-toggle">Show property changes</label>
               </div>
             </form>
           </div>
@@ -185,37 +183,12 @@
       <form py:if="has_property_editor" method="post" id="propertyform"
             action="${href.ticket(ticket.id) + '#trac-add-comment' if ticket.exists
                       else href.newticket() + '#ticket'}">
-        <!--! Add comment -->
-        <div py:if="ticket.exists and can_append" id="trac-add-comment"
-             class="${classes('field', 'trac-scroll' if preview_mode else None)}">
-          <h3 class="foldable" id="edit">Add Comment</h3>
-          <div>
-            <div id="trac-edit-warning" class="warning system-message"
-                 style="${'display: none' if start_time == ticket['changetime'] else None}"
-                 i18n:msg="">
-              This ticket has been modified since you started editing. You should review the
-              <em class="trac-new">other modifications</em> which have been appended above,
-              and any <em class="trac-conflict">conflicts</em> shown in the preview below.
-              You can nevertheless proceed and submit your changes if you wish so.
-            </div>
-            <!--! Comment field -->
-            <fieldset>
-              <label for="comment" i18n:msg="">You may use
-                <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a>
-                here.
-              </label>
-              <textarea id="comment" name="comment" class="wikitext trac-fullwidth trac-resizable" rows="10" cols="78">
-${comment}</textarea>
-            </fieldset>
-          </div>
-        </div>
-
         <div>
           <h3 py:if="ticket.exists" class="foldable">Modify Ticket</h3>
           <div id="modify">
             <!--! Properties -->
             <fieldset id="properties" py:if="can_modify or can_edit or can_create"
-                      py:with="fields = [f for f in fields if not f.skip]">
+                      py:with="fields = [f for f in fields if not f.skip and f.editable]">
               <legend py:choose="">
                   <py:when test="ticket.exists">Change Properties</py:when>
                   <py:otherwise>Properties</py:otherwise>
@@ -230,19 +203,29 @@ ${comment}</textarea>
                            value="$ticket.summary" />
                   </td>
                 </tr>
-                <tr py:if="only_for_admin">
-                  <th><label for="field-reporter">Reporter:</label></th>
+                <!--! Reporter field -->
+                <tr py:if="only_for_admin or (not ticket.exists and authname == 'anonymous')">
+                  <th>
+                    <label for="field-reporter" py:choose="">
+                      <py:when test="only_for_admin">Reporter:</py:when>
+                      <py:otherwise>Your email or username:</py:otherwise>
+                    </label>
+                  </th>
                   <td class="fullrow" colspan="3">
                     <input type="text" id="field-reporter" name="field_reporter"
                            value="${ticket.reporter}" />
+                    <p py:if="not only_for_admin and ticket.reporter == 'anonymous'" class="hint">
+                      <i18n:msg>E-mail address and name can be saved in the <!--!
+                        --><a href="${href.prefs()}" class="trac-target-new">Preferences</a>.</i18n:msg>
+                    </p>
                   </td>
                 </tr>
                 <tr py:if="can_edit or can_create">
                   <th><label for="field-description">Description:</label></th>
                   <td class="fullrow" colspan="3">
                     <fieldset>
-                      <label for="field-description" id="field-description-help" i18n:msg="">You may use
-                        <a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here.
+                      <label for="field-description" id="field-description-help" i18n:msg="">You may use <!--!
+                        --><a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here.
                       </label>
                       <textarea id="field-description" name="field_description"
                                 class="wikitext trac-fullwidth trac-resizable" rows="10" cols="68">
@@ -296,17 +279,30 @@ ${value}</textarea>
                                name="field_${field.name}" value="${field.edit}" class="trac-${field.format}picker" />
                         <py:otherwise><!--! Text input fields -->
                           <py:choose>
-                            <span py:when="field.cc_entry"><!--! Special case for Cc: field -->
-                              <em>${field.cc_entry}</em>
-                              <input type="checkbox" id="field-cc" name="cc_update"
-                                title="This checkbox allows you to add or remove yourself from the CC list."
-                                checked="${field.cc_update}" />
-                            </span>
-                            <!--! Cc: when TICKET_EDIT_CC is allowed -->
+                            <!--! Special case for Cc: field -->
                             <span py:when="field.name == 'cc'">
-                              <input  type="text" id="field-${field.name}"
-                                title="Space or comma delimited email addresses and usernames are accepted."
-                                name="field_${field.name}" value="${value}" />
+                              <py:choose>
+                                <!--! Unauthenticated user without TICKET_EDIT_CC and with email set in prefs -->
+                                <py:when test="'cc_entry' in field" py:choose="">
+                                  <em py:when="field.cc_action is None" i18n:msg="">
+                                    Set your email in <a href="${href.prefs()}" class="trac-target-new">Preferences</a>
+                                  </em>
+                                  <label py:otherwise="" for="field-cc"><em>$field.cc_entry</em></label>
+                                  <input type="checkbox" id="field-cc" name="cc_update"
+                                         title="This checkbox allows you to add or remove yourself from the CC list."
+                                         disabled="${field.cc_action is None or None}" checked="${field.cc_update or None}" />
+                                </py:when>
+                                <!--! Unauthenticated user without TICKET_EDIT_CC and no email set in prefs -->
+                                <py:when test="field.cc_action is None">
+
+                                </py:when>
+                                <!--! TICKET_EDIT_CC is allowed -->
+                                <py:otherwise>
+                                  <input type="text" id="field-${field.name}"
+                                         title="Space or comma delimited email addresses and usernames are accepted."
+                                         name="field_${field.name}" value="${value}" />
+                                </py:otherwise>
+                              </py:choose>
                             </span>
                             <!--! All the other text input fields -->
                             <input py:otherwise="" type="text" id="field-${field.name}"
@@ -321,55 +317,62 @@ ${value}</textarea>
             </fieldset>
 
             <!--! Workflow support -->
-            <py:if test="ticket.exists"> <!--! do not display the actions for New tickets -->
-              <py:choose>
-                <fieldset py:when="can_append or can_modify" id="action">
-                  <legend>Action</legend>
-                  <div py:for="key, label, controls, hints in action_controls">
-                      <input type="radio" id="action_$key" name="action" value="$key"
-                             checked="${key == action or None}" />
-                      <label for="action_$key">$label</label>
-                      $controls
-                      <span class="hint" py:for="hint in hints">$hint</span>
-                  </div>
-                </fieldset>
-                <py:otherwise>
-                  <py:for each="key, label, controls, hints in action_controls">
-                    <input py:if="key == action" type="hidden" name="action" value="$action" />
-                  </py:for>
-                </py:otherwise>
-              </py:choose>
-            </py:if>
+            <py:choose>
+              <fieldset py:when="can_append or can_modify" id="action">
+                <legend>Action</legend>
+                <div py:for="key, label, controls, hints in action_controls">
+                  <input type="radio" id="action_$key" name="action" value="$key"
+                         checked="${key == action or None}" />
+                  <label for="action_$key">$label</label>
+                  $controls
+                  <span class="hint" py:for="hint in hints">$hint</span>
+                </div>
+              </fieldset>
+              <py:otherwise py:for="key, label, controls, hints in action_controls">
+                <input py:if="key == action" type="hidden" name="action" value="$action" />
+              </py:otherwise>
+            </py:choose>
           </div>
         </div>
 
-        <!--! Preview of ticket changes -->
-        <div py:if="ticket.exists and can_append" id="ticketchange" class="ticketdraft"
-             style="${'display: none' if not (change_preview.fields or change_preview.comment)
-                                         or cnum_edit is not None else None}">
-          <xi:include href="ticket_change.html" py:with="change = change_preview; preview = True"/>
-        </div>
-
-        <!--! Author or Reporter -->
-        <div py:if="authname == 'anonymous'" class="field">
-          <fieldset py:choose="">
-            <legend py:when="ticket.exists">Author</legend>
-            <legend py:otherwise="">Reporter</legend>
-            <table>
-              <tr>
-                <th>
-                  <label for="author">Your email or username:</label><br />
-                </th>
-                <td>
-                  <input type="text" id="author" name="author" size="40" value="$author_id" />
-                  <br />
-                </td>
-              </tr>
-            </table>
-            <p py:if="author_id == 'anonymous'" class="hint">
-              <i18n:msg>E-mail address and user name can be saved in the <a href="${href.prefs()}" class="trac-target-new">Preferences</a>.</i18n:msg>
-            </p>
-          </fieldset>
+        <!--! Add comment -->
+        <div py:if="ticket.exists and can_append" id="trac-add-comment"
+             class="${classes('field', 'trac-scroll' if preview_mode else None)}">
+          <h3 class="foldable" id="edit">Add Comment</h3>
+          <div>
+            <div id="trac-edit-warning" class="warning system-message"
+                 style="${'display: none' if start_time == ticket['changetime'] else None}"
+                 i18n:msg="">
+              This ticket has been modified since you started editing. You should review the
+              <em class="trac-new">other modifications</em> which have been appended above,
+              and any <em class="trac-conflict">conflicts</em> shown in the preview below.
+              You can nevertheless proceed and submit your changes if you wish so.
+            </div>
+            <!--! Comment field -->
+            <fieldset>
+              <div py:if="authname == 'anonymous'" class="author">
+                <table>
+                  <tr>
+                    <th>
+                      <label for="author">Your email or username:</label><br />
+                    </th>
+                    <td>
+                      <input type="text" id="author" name="author" value="$author_id" />
+                    </td>
+                  </tr>
+                </table>
+                <p py:if="author_id == 'anonymous'" class="hint">
+                  <i18n:msg>E-mail address and name can be saved in the <!--!
+                    --><a href="${href.prefs()}" class="trac-target-new">Preferences</a>.</i18n:msg>
+                </p>
+              </div>
+              <label for="comment" i18n:msg="">You may use <!--!
+                --><a tabindex="42" href="${href.wiki('WikiFormatting')}">WikiFormatting</a> here.
+              </label>
+              <textarea id="comment" name="comment" class="wikitext trac-fullwidth trac-resizable" rows="10" cols="78">
+${comment}</textarea>
+            </fieldset>
+          </div>
         </div>
 
         <!--! Attachment on creation checkbox -->
@@ -392,6 +395,13 @@ ${value}</textarea>
           </py:if>
           <input type="submit" name="preview" value="${_('Preview')}" accesskey="r" />&nbsp;
           <input type="submit" name="submit" value="${_('Submit changes') if ticket.exists else _('Create ticket')}" class="trac-disable-on-submit" />
+        </div>
+
+        <!--! Preview of ticket changes -->
+        <div py:if="ticket.exists and can_append" id="ticketchange" class="ticketdraft"
+             style="${'display: none' if not (change_preview.fields or change_preview.comment)
+                                         or cnum_edit is not None else None}">
+          <xi:include href="ticket_change.html" py:with="change = change_preview; preview = True"/>
         </div>
 
       </form>

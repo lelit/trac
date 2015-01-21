@@ -21,11 +21,11 @@ import setuptools
 import sys
 from urlparse import urlsplit
 
-from trac import db_default
+from trac import db_default, log
 from trac.admin import AdminCommandError, IAdminCommandProvider
-from trac.cache import CacheManager
-from trac.config import BoolOption, ConfigSection, Configuration, Option, \
-                        PathOption
+from trac.cache import CacheManager, cached
+from trac.config import BoolOption, ChoiceOption, ConfigSection, \
+                        Configuration, Option, PathOption
 from trac.core import Component, ComponentManager, implements, Interface, \
                       ExtensionPoint, TracBaseError, TracError
 from trac.db.api import (DatabaseManager, QueryContextManager,
@@ -146,13 +146,13 @@ class Environment(Component, ComponentManager):
         {{{
         [components]
         trac.ticket.report.ReportModule = disabled
-        webadmin.* = enabled
+        acct_mgr.* = enabled
         }}}
 
         The first option tells Trac to disable the
         [wiki:TracReports report module].
         The second option instructs Trac to enable all components in
-        the `webadmin` package. Note that the trailing wildcard is
+        the `acct_mgr` package. Note that the trailing wildcard is
         required for module/package matching.
 
         To view the list of active components, go to the ''Plugins''
@@ -168,8 +168,7 @@ class Environment(Component, ComponentManager):
         Plugins in that directory are loaded in addition to those in
         the directory of the environment `plugins`, with this one
         taking precedence.
-
-        (''since 0.11'')""")
+        """)
 
     base_url = Option('trac', 'base_url', '',
         """Reference URL for the Trac deployment.
@@ -189,15 +188,16 @@ class Environment(Component, ComponentManager):
         force Trac to use the `base_url` setting also for
         redirects. This introduces the obvious limitation that this
         environment will only be usable when accessible from that URL,
-        as redirects are frequently used. (''since 0.10.5'')""")
+        as redirects are frequently used.
+        """)
 
     secure_cookies = BoolOption('trac', 'secure_cookies', False,
         """Restrict cookies to HTTPS connections.
 
         When true, set the `secure` flag on all cookies so that they
         are only sent to the server on HTTPS connections. Use this if
-        your Trac instance is only accessible through HTTPS. (''since
-        0.11.2'')""")
+        your Trac instance is only accessible through HTTPS.
+        """)
 
     project_name = Option('project', 'name', 'My Project',
         """Name of the project.""")
@@ -219,7 +219,8 @@ class Environment(Component, ComponentManager):
 
         This can be an absolute or relative URL, or '.' to reference
         this Trac instance. An empty value will disable the reporting
-        buttons.  (''since 0.11.3'')""")
+        buttons.
+        """)
 
     project_footer = Option('project', 'footer',
                             N_('Visit the Trac open source project at<br />'
@@ -230,7 +231,8 @@ class Environment(Component, ComponentManager):
     project_icon = Option('project', 'icon', 'common/trac.ico',
         """URL of the icon of the project.""")
 
-    log_type = Option('logging', 'log_type', 'none',
+    log_type = ChoiceOption('logging', 'log_type',
+                            log.LOG_TYPES + log.LOG_TYPE_ALIASES,
         """Logging facility to use.
 
         Should be one of (`none`, `file`, `stderr`, `syslog`, `winlog`).""")
@@ -240,33 +242,35 @@ class Environment(Component, ComponentManager):
         log-file.  Relative paths are resolved relative to the `log`
         directory of the environment.""")
 
-    log_level = Option('logging', 'log_level', 'DEBUG',
+    log_level = ChoiceOption('logging', 'log_level',
+                             tuple(reversed(log.LOG_LEVELS)) +
+                             log.LOG_LEVEL_ALIASES,
         """Level of verbosity in log.
 
-        Should be one of (`CRITICAL`, `ERROR`, `WARN`, `INFO`, `DEBUG`).""")
+        Should be one of (`CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`).
+        """)
 
     log_format = Option('logging', 'log_format', None,
         """Custom logging format.
 
         If nothing is set, the following will be used:
 
-        Trac[$(module)s] $(levelname)s: $(message)s
+        `Trac[$(module)s] $(levelname)s: $(message)s`
 
-        In addition to regular key names supported by the Python
-        logger library (see
-        http://docs.python.org/library/logging.html), one could use:
+        In addition to regular key names supported by the
+        [http://docs.python.org/library/logging.html Python logger library]
+        one could use:
 
-        - $(path)s     the path for the current environment
-        - $(basename)s the last path component of the current environment
-        - $(project)s  the project name
+        - `$(path)s`     the path for the current environment
+        - `$(basename)s` the last path component of the current environment
+        - `$(project)s`  the project name
 
         Note the usage of `$(...)s` instead of `%(...)s` as the latter form
-        would be interpreted by the ConfigParser itself.
+        would be interpreted by the !ConfigParser itself.
 
         Example:
         `($(thread)d) Trac[$(basename)s:$(module)s] $(levelname)s: $(message)s`
-
-        (''since 0.10.5'')""")
+        """)
 
     def __init__(self, path, create=False, options=[]):
         """Initialize the Trac environment.
@@ -297,6 +301,17 @@ class Environment(Component, ComponentManager):
         if create:
             for setup_participant in self.setup_participants:
                 setup_participant.environment_created()
+
+    def __repr__(self):
+        return '<%s %r>' % (self.__class__.__name__, self.path)
+
+    @property
+    def env(self):
+        """Property returning the `Environment` object, which is often
+        required for functions and methods that take a `Component` instance.
+        """
+        # The cached decorator requires the object have an `env` attribute.
+        return self
 
     def get_systeminfo(self):
         """Return a list of `(name, version)` tuples describing the name
@@ -384,18 +399,6 @@ class Environment(Component, ComponentManager):
         """
         component_name = self._component_name(cls)
 
-        # Disable the pre-0.11 WebAdmin plugin
-        # Please note that there's no recommendation to uninstall the
-        # plugin because doing so would obviously break the backwards
-        # compatibility that the new integration administration
-        # interface tries to provide for old WebAdmin extensions
-        if component_name.startswith('webadmin.'):
-            self.log.info("The legacy TracWebAdmin plugin has been "
-                          "automatically disabled, and the integrated "
-                          "administration interface will be used "
-                          "instead.")
-            return False
-
         rules = self._component_rules
         cname = component_name
         while cname:
@@ -408,9 +411,10 @@ class Environment(Component, ComponentManager):
             cname = cname[:idx]
 
         # By default, all components in the trac package except
-        # trac.test are enabled
+        # in trac.test or trac.tests are enabled
         return component_name.startswith('trac.') and \
-               not component_name.startswith('trac.test.') or None
+               not component_name.startswith('trac.test.') and \
+               not component_name.startswith('trac.tests.') or None
 
     def enable_component(self, cls):
         """Enable a component or module."""
@@ -422,10 +426,11 @@ class Environment(Component, ComponentManager):
         try:
             tag = read_file(os.path.join(self.path, 'VERSION')).splitlines()[0]
             if tag != _VERSION:
-                raise Exception("Unknown Trac environment type '%s'" % tag)
+                raise Exception(_("Unknown Trac environment type '%(type)s'",
+                                  type=tag))
         except Exception as e:
-            raise TracError("No Trac environment found at %s\n%s"
-                            % (self.path, e))
+            raise TracError(_("No Trac environment found at %(path)s\n"
+                              "%(e)s", path=self.path, e=e))
 
     @lazy
     def db_exc(self):
@@ -548,7 +553,7 @@ class Environment(Component, ComponentManager):
             self._log_handler.close()
             del self._log_handler
 
-    def get_repository(self, reponame=None, authname=None):
+    def get_repository(self, reponame=None):
         """Return the version control repository with the given name,
         or the default repository if `None`.
 
@@ -557,9 +562,6 @@ class Environment(Component, ComponentManager):
         for backward compatibility.
 
         :param reponame: the name of the repository
-        :param authname: the user name for authorization (not used
-                         anymore, left here for compatibility with
-                         0.11)
         """
         return RepositoryManager(self).get_repository(reponame)
 
@@ -607,7 +609,8 @@ class Environment(Component, ComponentManager):
 
         :since 1.0.2:
         """
-        return self.get_version()
+        return DatabaseManager(self) \
+               .get_database_version('database_version')
 
     @lazy
     def database_initial_version(self):
@@ -618,7 +621,8 @@ class Environment(Component, ComponentManager):
 
         :since 1.0.2:
         """
-        return self.get_version(initial=True)
+        return DatabaseManager(self) \
+               .get_database_version('initial_database_version')
 
     def get_version(self, initial=False):
         """Return the current version of the database.  If the
@@ -632,13 +636,11 @@ class Environment(Component, ComponentManager):
 
         :since 1.0.2: The lazily-evaluated attributes `database_version` and
                       `database_initial_version` should be used instead. This
-                      method will be renamed to a private method in
-                      release 1.3.1.
+                      method will be removed in release 1.3.1.
         """
-        rows = self.db_query("""
-                SELECT value FROM system WHERE name='%sdatabase_version'
-                """ % ('initial_' if initial else ''))
-        return int(rows[0][0]) if rows else False
+        dbm = DatabaseManager(self)
+        return dbm.get_database_version(
+            '{0}database_version'.format('initial_' if initial else ''))
 
     def setup_config(self):
         """Load the configuration file."""
@@ -690,16 +692,23 @@ class Environment(Component, ComponentManager):
         This function generates one tuple for every user, of the form
         (username, name, email) ordered alpha-numerically by username.
         """
-        for username, name, email in self.db_query("""
+        return iter(self._known_users)
+
+    @cached
+    def _known_users(self):
+        return self.db_query("""
                 SELECT DISTINCT s.sid, n.value, e.value
                 FROM session AS s
                  LEFT JOIN session_attribute AS n ON (n.sid=s.sid
-                  and n.authenticated=1 AND n.name = 'name')
+                  AND n.authenticated=1 AND n.name = 'name')
                  LEFT JOIN session_attribute AS e ON (e.sid=s.sid
                   AND e.authenticated=1 AND e.name = 'email')
                 WHERE s.authenticated=1 ORDER BY s.sid
-                """):
-            yield username, name, email
+        """)
+
+    def invalidate_known_users_cache(self):
+        """Clear the known_users cache."""
+        del self._known_users
 
     def backup(self, dest=None):
         """Create a backup of the database.
@@ -770,10 +779,7 @@ class Environment(Component, ComponentManager):
         if not self.base_url:
             self.log.warn("base_url option not set in configuration, "
                           "generated links may be incorrect")
-            _abs_href = Href('')
-        else:
-            _abs_href = Href(self.base_url)
-        return _abs_href
+        return Href(self.base_url)
 
 
 class EnvironmentSetup(Component):
@@ -787,11 +793,7 @@ class EnvironmentSetup(Component):
 
     def environment_created(self):
         """Insert default data into the database."""
-        with self.env.db_transaction as db:
-            for table, cols, vals in db_default.get_data(db):
-                db.executemany("INSERT INTO %s (%s) VALUES (%s)"
-                               % (table, ','.join(cols),
-                                  ','.join(['%s'] * len(cols))), vals)
+        DatabaseManager(self.env).insert_into_tables(db_default.get_data)
         self._update_sample_config()
 
     def environment_needs_upgrade(self):
@@ -808,6 +810,7 @@ class EnvironmentSetup(Component):
         """Each db version should have its own upgrade module, named
         upgrades/dbN.py, where 'N' is the version number (int).
         """
+        dbm = DatabaseManager(self.env)
         dbver = self.env.database_version
         with self.env.db_transaction as db:
             cursor = db.cursor()
@@ -822,11 +825,7 @@ class EnvironmentSetup(Component):
                                       "(%(version)s.py)", num=i,
                                       version=name))
                 script.do_upgrade(self.env, i, cursor)
-                cursor.execute("""
-                    UPDATE system SET value=%s WHERE name='database_version'
-                    """, (i,))
-                self.log.info("Upgraded database version from %d to %d",
-                              i - 1, i)
+                dbm.set_database_version(i)
                 db.commit()
         self._update_sample_config()
 

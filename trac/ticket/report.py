@@ -113,13 +113,16 @@ class ReportModule(Component):
     implements(INavigationContributor, IPermissionRequestor, IRequestHandler,
                IWikiSyntaxProvider)
 
+    realm = TicketSystem.realm
+
     items_per_page = IntOption('report', 'items_per_page', 100,
         """Number of tickets displayed per page in ticket reports,
-        by default. (''since 0.11'')""")
+        by default.
+        """)
 
     items_per_page_rss = IntOption('report', 'items_per_page_rss', 0,
         """Number of tickets displayed in the rss feeds for reports.
-        (''since 0.11'')""")
+        """)
 
     REPORT_LIST_ID = -1  # Resource id of the report list page
 
@@ -186,7 +189,7 @@ class ReportModule(Component):
                 return template, data, content_type
 
         from trac.ticket.query import QueryModule
-        show_query_link = 'TICKET_VIEW' in req.perm('ticket') and \
+        show_query_link = 'TICKET_VIEW' in req.perm(self.realm) and \
                           self.env.is_component_enabled(QueryModule)
 
         if  (id != self.REPORT_LIST_ID or action == 'new') and \
@@ -530,7 +533,7 @@ class ReportModule(Component):
             col_idx = 0
             cell_groups = []
             row = {'cell_groups': cell_groups}
-            realm = 'ticket'
+            realm = self.realm
             parent_realm = ''
             parent_id = ''
             email_cells = []
@@ -819,7 +822,7 @@ class ReportModule(Component):
             return '%s'
 
         # inside a literal break it and concatenate with the parameter
-        def repl_literal(expr):
+        def repl_literal(expr, db):
             parts = sub_vars_re.split(expr[1:-1])
             if len(parts) == 1:
                 return expr
@@ -828,17 +831,18 @@ class ReportModule(Component):
             parts[1::2] = ['%s'] * len(params)
             for param in params:
                 add_value(param)
-            return self.env.get_read_db().concat(*parts)
+            return db.concat(*parts)
 
         sql_io = StringIO()
 
         # break SQL into literals and non-literals to handle replacing
         # variables within them with query parameters
-        for expr in re.split("('(?:[^']|(?:''))*')", sql):
-            if expr.startswith("'"):
-                sql_io.write(repl_literal(expr))
-            else:
-                sql_io.write(sub_vars_re.sub(repl, expr))
+        with self.env.db_query as db:
+            for expr in re.split("('(?:[^']|(?:''))*')", sql):
+                if expr.startswith("'"):
+                    sql_io.write(repl_literal(expr, db))
+                else:
+                    sql_io.write(sub_vars_re.sub(repl, expr))
 
         # Remove arguments that don't appear in the SQL query
         for name in set(args) - names:

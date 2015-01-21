@@ -23,6 +23,7 @@ from trac.admin import AdminCommandError, IAdminCommandProvider, get_dir_list
 from trac.config import ConfigSection, ListOption, Option
 from trac.core import *
 from trac.resource import IResourceManager, Resource, ResourceNotFound
+from trac.util import as_bool
 from trac.util.concurrency import threading
 from trac.util.datefmt import utc
 from trac.util.text import printout, to_unicode, exception_to_unicode
@@ -33,6 +34,10 @@ from trac.web.api import IRequestFilter
 def is_default(reponame):
     """Check whether `reponame` is the default repository."""
     return not reponame or reponame in ('(default)', _('(default)'))
+
+
+class InvalidRepository(TracError):
+    """Exception raised when a repository is invalid."""
 
 
 class IRepositoryConnector(Interface):
@@ -113,7 +118,7 @@ class DbRepositoryProvider(Component):
     implements(IRepositoryProvider, IAdminCommandProvider)
 
     repository_attrs = ('alias', 'description', 'dir', 'hidden', 'name',
-                        'type', 'url')
+                        'sync_per_request', 'type', 'url')
 
     # IRepositoryProvider methods
 
@@ -190,6 +195,8 @@ class DbRepositoryProvider(Component):
             raise AdminCommandError(_('Invalid key "%(key)s"', key=key))
         if key == 'dir':
             value = os.path.abspath(value)
+        if key in ('hidden', 'sync_per_request'):
+            value = '1' if as_bool(value) else None
         self.modify_repository(reponame, {key: value})
         if not reponame:
             reponame = '(default)'
@@ -287,6 +294,10 @@ class RepositoryManager(Component):
 
     implements(IRequestFilter, IResourceManager, IRepositoryProvider)
 
+    changeset_realm = 'changeset'
+    source_realm = 'source'
+    repository_realm = 'repository'
+
     connectors = ExtensionPoint(IRepositoryConnector)
     providers = ExtensionPoint(IRepositoryProvider)
     change_listeners = ExtensionPoint(IRepositoryChangeListener)
@@ -306,32 +317,12 @@ class RepositoryManager(Component):
         (''since 0.12'')""")
 
     repository_type = Option('trac', 'repository_type', 'svn',
-        """Default repository connector type. (''since 0.10'')
+        """Default repository connector type.
 
-        This is also used as the default repository type for repositories
-        defined in [[TracIni#repositories-section repositories]] or using the
-        "Repositories" admin panel. (''since 0.12'')
+        This is used as the default repository type for repositories defined
+        in the [[TracIni#repositories-section repositories]] section or using
+        the "Repositories" admin panel. (''since 0.12'')
         """)
-
-    repository_dir = Option('trac', 'repository_dir', '',
-        """Path to the default repository. This can also be a relative path
-        (''since 0.11'').
-
-        This option is deprecated, and repositories should be defined in the
-        [TracIni#repositories-section repositories] section, or using the
-        "Repositories" admin panel. (''since 0.12'')""")
-
-    repository_sync_per_request = ListOption('trac',
-        'repository_sync_per_request', '(default)',
-        doc="""List of repositories that should be synchronized on every page
-        request.
-
-        Leave this option empty if you have set up post-commit hooks calling
-        `trac-admin $ENV changeset added` on all your repositories
-        (recommended). Otherwise, set it to a comma-separated list of
-        repository names. Note that this will negatively affect performance,
-        and will prevent changeset listeners from receiving events from the
-        repositories specified here. (''since 0.12'')""")
 
     def __init__(self):
         self._cache = {}
@@ -344,24 +335,19 @@ class RepositoryManager(Component):
     def pre_process_request(self, req, handler):
         from trac.web.chrome import Chrome, add_warning
         if handler is not Chrome(self.env):
-            for reponame in self.repository_sync_per_request:
+            for repo_info in self.get_all_repositories().values():
+                if not as_bool(repo_info.get('sync_per_request')):
+                    continue
                 start = time.time()
-                if is_default(reponame):
-                    reponame = ''
+                repo_name = repo_info['name'] or '(default)'
                 try:
-                    repo = self.get_repository(reponame)
-                    if repo:
-                        repo.sync()
-                    else:
-                        self.log.warning("Unable to find repository '%s' for "
-                                         "synchronization",
-                                         reponame or '(default)')
-                        continue
+                    repo = self.get_repository(repo_info['name'])
+                    repo.sync()
                 except TracError as e:
                     add_warning(req,
                         _("Can't synchronize with repository \"%(name)s\" "
                           "(%(error)s). Look in the Trac log for more "
-                          "information.", name=reponame or '(default)',
+                          "information.", name=repo_name,
                           error=to_unicode(e)))
                 except Exception as e:
                     add_warning(req,
@@ -369,17 +355,16 @@ class RepositoryManager(Component):
                           "%(error)s; repository information may be out of "
                           "date. Look in the Trac log for more information "
                           "including mitigation strategies.",
-                          name=reponame or '(default)', error=to_unicode(e)))
+                          name=repo_name, error=to_unicode(e)))
                     self.log.error(
                         "Failed to sync with repository \"%s\"; You may be "
                         "able to reduce the impact of this issue by "
-                        "configuring [trac] repository_sync_per_request; see "
+                        "configuring the sync_per_request option; see "
                         "http://trac.edgewall.org/wiki/TracRepositoryAdmin"
-                        "#ExplicitSync for more detail: %s",
-                        reponame or '(default)',
+                        "#ExplicitSync for more detail: %s", repo_name,
                         exception_to_unicode(e, traceback=True))
                 self.log.info("Synchronized '%s' repository in %0.2f seconds",
-                              reponame or '(default)', time.time() - start)
+                              repo_name, time.time() - start)
         return handler
 
     def post_process_request(self, req, template, data, content_type):
@@ -388,12 +373,12 @@ class RepositoryManager(Component):
     # IResourceManager methods
 
     def get_resource_realms(self):
-        yield 'changeset'
-        yield 'source'
-        yield 'repository'
+        yield self.changeset_realm
+        yield self.source_realm
+        yield self.repository_realm
 
     def get_resource_description(self, resource, format=None, **kwargs):
-        if resource.realm == 'changeset':
+        if resource.realm == self.changeset_realm:
             parent = resource.parent
             reponame = parent and parent.id
             id = resource.id
@@ -401,7 +386,7 @@ class RepositoryManager(Component):
                 return _("Changeset %(rev)s in %(repo)s", rev=id, repo=reponame)
             else:
                 return _("Changeset %(rev)s", rev=id)
-        elif resource.realm == 'source':
+        elif resource.realm == self.source_realm:
             parent = resource.parent
             reponame = parent and parent.id
             id = resource.id
@@ -423,43 +408,43 @@ class RepositoryManager(Component):
             # TRANSLATOR: file /path/to/file.py at version 13 in reponame
             return _('%(kind)s %(id)s%(at_version)s%(in_repo)s',
                      kind=kind, id=id, at_version=version, in_repo=in_repo)
-        elif resource.realm == 'repository':
+        elif resource.realm == self.repository_realm:
             if not resource.id:
                 return _("Default repository")
             return _("Repository %(repo)s", repo=resource.id)
 
     def get_resource_url(self, resource, href, **kwargs):
-        if resource.realm == 'changeset':
+        if resource.realm == self.changeset_realm:
             parent = resource.parent
             return href.changeset(resource.id, parent and parent.id or None)
-        elif resource.realm == 'source':
+        elif resource.realm == self.source_realm:
             parent = resource.parent
             return href.browser(parent and parent.id or None, resource.id,
                                 rev=resource.version or None)
-        elif resource.realm == 'repository':
+        elif resource.realm == self.repository_realm:
             return href.browser(resource.id or None)
 
     def resource_exists(self, resource):
-        if resource.realm == 'repository':
+        if resource.realm == self.repository_realm:
             reponame = resource.id
         else:
             reponame = resource.parent.id
         repos = self.env.get_repository(reponame)
         if not repos:
             return False
-        if resource.realm == 'changeset':
+        if resource.realm == self.changeset_realm:
             try:
                 repos.get_changeset(resource.id)
                 return True
             except NoSuchChangeset:
                 return False
-        elif resource.realm == 'source':
+        elif resource.realm == self.source_realm:
             try:
                 repos.get_node(resource.id, resource.version)
                 return True
             except NoSuchNode:
                 return False
-        elif resource.realm == 'repository':
+        elif resource.realm == self.repository_realm:
             return True
 
     # IRepositoryProvider methods
@@ -472,13 +457,10 @@ class RepositoryManager(Component):
         """
         repositories = self.repositories_section
         reponames = {}
-        # eventually add pre-0.12 default repository
-        if self.repository_dir:
-            reponames[''] = {'dir': self.repository_dir}
         # first pass to gather the <name>.dir entries
         for option in repositories:
             if option.endswith('.dir'):
-                reponames[option[:-4]] = {}
+                reponames[option[:-4]] = {'sync_per_request': False}
         # second pass to gather aliases
         for option in repositories:
             alias = repositories.get(option)
@@ -546,11 +528,13 @@ class RepositoryManager(Component):
         """Retrieve the appropriate `Repository` for the given
         repository name.
 
-           :param reponame: the key for specifying the repository.
-                            If no name is given, take the default
-                            repository.
-           :return: if no corresponding repository was defined,
-                    simply return `None`.
+        :param reponame: the key for specifying the repository.
+                         If no name is given, take the default
+                         repository.
+        :return: if no corresponding repository was defined,
+                 simply return `None`.
+
+        :raises InvalidRepository: if the repository cannot be opened.
         """
         reponame = reponame or ''
         repoinfo = self.get_all_repositories().get(reponame, {})
@@ -610,7 +594,8 @@ class RepositoryManager(Component):
         hierarchy and return the name of its associated repository.
         """
         while context:
-            if context.resource.realm in ('source', 'changeset'):
+            if context.resource.realm in (self.source_realm,
+                                          self.changeset_realm):
                 return context.resource.parent.id
             context = context.parent
 
@@ -680,28 +665,43 @@ class RepositoryManager(Component):
             self.log.warn("Found no repositories matching '%s' base.",
                           base or reponame)
             return
+
+        errors = []
         for repos in sorted(repositories, key=lambda r: r.reponame):
+            reponame = repos.reponame or '(default)'
             repos.sync()
             for rev in revs:
                 args = []
                 if event == 'changeset_modified':
-                    args.append(repos.sync_changeset(rev))
+                    try:
+                        old_changeset = repos.sync_changeset(rev)
+                    except NoSuchChangeset as e:
+                        errors.append(exception_to_unicode(e))
+                        self.log.warn(
+                            "No changeset '%s' found in repository '%s'. "
+                            "Skipping subscribers for event %s",
+                            rev, reponame, event)
+                        continue
+                    else:
+                        args.append(old_changeset)
                 try:
                     changeset = repos.get_changeset(rev)
                 except NoSuchChangeset:
                     try:
                         repos.sync_changeset(rev)
                         changeset = repos.get_changeset(rev)
-                    except NoSuchChangeset:
-                        self.log.debug(
+                    except NoSuchChangeset as e:
+                        errors.append(exception_to_unicode(e))
+                        self.log.warn(
                             "No changeset '%s' found in repository '%s'. "
                             "Skipping subscribers for event %s",
-                            rev, repos.reponame or '(default)', event)
+                            rev, reponame, event)
                         continue
                 self.log.debug("Event %s on repository '%s' for revision '%s'",
-                               event, repos.reponame or '(default)', rev)
+                               event, reponame, rev)
                 for listener in self.change_listeners:
                     getattr(listener, event)(repos, changeset, *args)
+        return errors
 
     def shutdown(self, tid=None):
         """Free `Repository` instances bound to a given thread identifier"""
@@ -773,7 +773,11 @@ class Repository(object):
 
     scope = '/'
 
-    realm = 'repository'
+    realm = RepositoryManager.repository_realm
+
+    @property
+    def resource(self):
+        return Resource(self.realm, self.reponame)
 
     def __init__(self, name, params, log):
         """Initialize a repository.
@@ -786,13 +790,18 @@ class Repository(object):
                           the surrogate key that identifies the repository in
                           the database under the key "id".
            :param log: a logger instance.
+
+           :raises InvalidRepository: if the repository cannot be opened.
         """
         self.name = name
         self.params = params
         self.reponame = params['name']
         self.id = params['id']
         self.log = log
-        self.resource = Resource(self.realm, self.reponame)
+
+    def __repr__(self):
+        return '<%s %r %r %r>' % (self.__class__.__name__,
+                                  self.id, self.name, self.scope)
 
     @abstractmethod
     def close(self):
@@ -979,11 +988,16 @@ class Repository(object):
 
         In addition, if `rev` is `None` or '', the youngest revision should
         be returned.
+
+        :raise NoSuchChangeset: If the given `rev` isn't found.
         """
         pass
 
     def short_rev(self, rev):
-        """Return a compact representation of a revision in the repos."""
+        """Return a compact representation of a revision in the repos.
+
+        :raise NoSuchChangeset: If the given `rev` isn't found.
+        """
         return self.normalize_rev(rev)
 
     def display_rev(self, rev):
@@ -992,6 +1006,8 @@ class Repository(object):
 
         This can be a shortened revision string, e.g. for repositories using
         long hashes.
+
+        :raise NoSuchChangeset: If the given `rev` isn't found.
         """
         return self.normalize_rev(rev)
 
@@ -1023,11 +1039,11 @@ class Node(object):
     DIRECTORY = "dir"
     FILE = "file"
 
-    realm = 'source'
+    realm = RepositoryManager.source_realm
 
-    resource = property(lambda self: Resource(self.realm, self.path,
-                                              version=self.rev,
-                                              parent=self.repos.resource))
+    @property
+    def resource(self):
+        return Resource(self.realm, self.path, self.rev, self.repos.resource)
 
     # created_path and created_rev properties refer to the Node "creation"
     # in the Subversion meaning of a Node in a versioned tree (see #3340).
@@ -1044,6 +1060,12 @@ class Node(object):
         self.path = to_unicode(path)
         self.rev = rev
         self.kind = kind
+
+    def __repr__(self):
+        name = u'%s:%s' % (self.repos.name, self.path)
+        if self.rev is not None:
+            name += '@' + unicode(self.rev)
+        return '<%s %r>' % (self.__class__.__name__, name)
 
     @abstractmethod
     def get_content(self):
@@ -1179,10 +1201,11 @@ class Changeset(object):
     OTHER_CHANGES = (ADD, DELETE)
     ALL_CHANGES = DIFF_CHANGES + OTHER_CHANGES
 
-    realm = 'changeset'
+    realm = RepositoryManager.changeset_realm
 
-    resource = property(lambda self: Resource(self.realm, self.rev,
-                                              parent=self.repos.resource))
+    @property
+    def resource(self):
+        return Resource(self.realm, self.rev, parent=self.repos.resource)
 
     def __init__(self, repos, rev, message, author, date):
         self.repos = repos
@@ -1190,6 +1213,10 @@ class Changeset(object):
         self.message = message or ''
         self.author = author or ''
         self.date = date
+
+    def __repr__(self):
+        name = u'%s@%s' % (self.repos.name, self.rev)
+        return '<%s %r>' % (self.__class__.__name__, name)
 
     def get_properties(self):
         """Returns the properties (meta-data) of the node, as a dictionary.

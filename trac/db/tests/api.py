@@ -15,9 +15,10 @@ import os
 import unittest
 
 import trac.tests.compat
-from trac.db.api import DatabaseManager, _parse_db_str, get_column_names, \
-                        with_transaction
-from trac.db_default import schema as default_schema
+from trac.db.api import DatabaseManager, get_column_names, \
+                        parse_connection_uri, with_transaction
+from trac.db_default import (schema as default_schema,
+                             db_version as default_db_version)
 from trac.db.schema import Column, Table
 from trac.test import EnvironmentStub, Mock
 from trac.util.concurrency import ThreadLocal
@@ -226,21 +227,21 @@ class ParseConnectionStringTestCase(unittest.TestCase):
         # Default syntax for specifying DB path relative to the environment
         # directory
         self.assertEqual(('sqlite', {'path': 'db/trac.db'}),
-                         _parse_db_str('sqlite:db/trac.db'))
+                         parse_connection_uri('sqlite:db/trac.db'))
 
     def test_sqlite_absolute(self):
         # Standard syntax
         self.assertEqual(('sqlite', {'path': '/var/db/trac.db'}),
-                         _parse_db_str('sqlite:///var/db/trac.db'))
+                         parse_connection_uri('sqlite:///var/db/trac.db'))
         # Legacy syntax
         self.assertEqual(('sqlite', {'path': '/var/db/trac.db'}),
-                         _parse_db_str('sqlite:/var/db/trac.db'))
+                         parse_connection_uri('sqlite:/var/db/trac.db'))
 
     def test_sqlite_with_timeout_param(self):
         # In-memory database
         self.assertEqual(('sqlite', {'path': 'db/trac.db',
                                      'params': {'timeout': '10000'}}),
-                         _parse_db_str('sqlite:db/trac.db?timeout=10000'))
+                         parse_connection_uri('sqlite:db/trac.db?timeout=10000'))
 
     def test_sqlite_windows_path(self):
         # In-memory database
@@ -248,39 +249,39 @@ class ParseConnectionStringTestCase(unittest.TestCase):
         try:
             os.name = 'nt'
             self.assertEqual(('sqlite', {'path': 'C:/project/db/trac.db'}),
-                             _parse_db_str('sqlite:C|/project/db/trac.db'))
+                             parse_connection_uri('sqlite:C|/project/db/trac.db'))
         finally:
             os.name = os_name
 
     def test_postgres_simple(self):
         self.assertEqual(('postgres', {'host': 'localhost', 'path': '/trac'}),
-                         _parse_db_str('postgres://localhost/trac'))
+                         parse_connection_uri('postgres://localhost/trac'))
 
     def test_postgres_with_port(self):
         self.assertEqual(('postgres', {'host': 'localhost', 'port': 9431,
                                        'path': '/trac'}),
-                         _parse_db_str('postgres://localhost:9431/trac'))
+                         parse_connection_uri('postgres://localhost:9431/trac'))
 
     def test_postgres_with_creds(self):
         self.assertEqual(('postgres', {'user': 'john', 'password': 'letmein',
                                        'host': 'localhost', 'port': 9431,
                                        'path': '/trac'}),
-                 _parse_db_str('postgres://john:letmein@localhost:9431/trac'))
+                 parse_connection_uri('postgres://john:letmein@localhost:9431/trac'))
 
     def test_postgres_with_quoted_password(self):
         self.assertEqual(('postgres', {'user': 'john', 'password': ':@/',
                                        'host': 'localhost', 'path': '/trac'}),
-                     _parse_db_str('postgres://john:%3a%40%2f@localhost/trac'))
+                     parse_connection_uri('postgres://john:%3a%40%2f@localhost/trac'))
 
     def test_mysql_simple(self):
         self.assertEqual(('mysql', {'host': 'localhost', 'path': '/trac'}),
-                     _parse_db_str('mysql://localhost/trac'))
+                     parse_connection_uri('mysql://localhost/trac'))
 
     def test_mysql_with_creds(self):
         self.assertEqual(('mysql', {'user': 'john', 'password': 'letmein',
                                     'host': 'localhost', 'port': 3306,
                                     'path': '/trac'}),
-                     _parse_db_str('mysql://john:letmein@localhost:3306/trac'))
+                     parse_connection_uri('mysql://john:letmein@localhost:3306/trac'))
 
 
 class StringsTestCase(unittest.TestCase):
@@ -323,27 +324,27 @@ class StringsTestCase(unittest.TestCase):
                              get_column_names(cursor)[0])
 
     def test_quoted_id_with_percent(self):
-        db = self.env.get_read_db()
         name = """%?`%s"%'%%"""
 
-        def test(db, logging=False):
-            cursor = db.cursor()
-            if logging:
-                cursor.log = self.env.log
+        def test(logging=False):
+            with self.env.db_query as db:
+                cursor = db.cursor()
+                if logging:
+                    cursor.log = self.env.log
 
-            cursor.execute('SELECT 1 AS ' + db.quote(name))
-            self.assertEqual(name, get_column_names(cursor)[0])
-            cursor.execute('SELECT %s AS ' + db.quote(name), (42,))
-            self.assertEqual(name, get_column_names(cursor)[0])
-            cursor.executemany("UPDATE system SET value=%s WHERE "
-                               "1=(SELECT 0 AS " + db.quote(name) + ")",
-                               [])
-            cursor.executemany("UPDATE system SET value=%s WHERE "
-                               "1=(SELECT 0 AS " + db.quote(name) + ")",
-                               [('42',), ('43',)])
+                cursor.execute('SELECT 1 AS ' + db.quote(name))
+                self.assertEqual(name, get_column_names(cursor)[0])
+                cursor.execute('SELECT %s AS ' + db.quote(name), (42,))
+                self.assertEqual(name, get_column_names(cursor)[0])
+                cursor.executemany("UPDATE system SET value=%s WHERE "
+                                   "1=(SELECT 0 AS " + db.quote(name) + ")",
+                                   [])
+                cursor.executemany("UPDATE system SET value=%s WHERE "
+                                   "1=(SELECT 0 AS " + db.quote(name) + ")",
+                                   [('42',), ('43',)])
 
-        test(db)
-        test(db, logging=True)
+        test()
+        test(True)
 
     def test_prefix_match_case_sensitive(self):
         @self.env.with_transaction()
@@ -353,24 +354,22 @@ class StringsTestCase(unittest.TestCase):
                                [('blahblah',), ('BlahBlah',), ('BLAHBLAH',),
                                 (u'BlähBlah',), (u'BlahBläh',)])
 
-        db = self.env.get_read_db()
-        cursor = db.cursor()
-        cursor.execute("SELECT name FROM system WHERE name %s" %
-                       db.prefix_match(),
-                       (db.prefix_match_value('Blah'),))
-        names = sorted(name for name, in cursor)
+        with self.env.db_query as db:
+            names = sorted(name for name, in db(
+                "SELECT name FROM system WHERE name %s"
+                % db.prefix_match(),
+                (db.prefix_match_value('Blah'),)))
         self.assertEqual('BlahBlah', names[0])
         self.assertEqual(u'BlahBläh', names[1])
         self.assertEqual(2, len(names))
 
     def test_prefix_match_metachars(self):
         def do_query(prefix):
-            db = self.env.get_read_db()
-            cursor = db.cursor()
-            cursor.execute("SELECT name FROM system WHERE name %s "
-                           "ORDER BY name" % db.prefix_match(),
-                           (db.prefix_match_value(prefix),))
-            return [name for name, in cursor]
+            with self.env.db_query as db:
+                return [name for name, in db(
+                    "SELECT name FROM system WHERE name %s "
+                    "ORDER BY name" % db.prefix_match(),
+                    (db.prefix_match_value(prefix),))]
 
         @self.env.with_transaction()
         def do_insert(db):
@@ -489,12 +488,53 @@ class ConnectionTestCase(unittest.TestCase):
                     self.assertIn(column.name, db_columns)
 
 
+class DatabaseManagerTestCase(unittest.TestCase):
+
+    def setUp(self):
+        self.env = EnvironmentStub(default_data=True)
+        self.dbm = DatabaseManager(self.env)
+
+    def tearDown(self):
+        self.env.reset_db()
+
+    def test_get_default_database_version(self):
+        """Get database version for the default entry named
+        `database_version`.
+        """
+        self.assertEqual(default_db_version, self.dbm.get_database_version())
+
+    def test_set_default_database_version(self):
+        """Set database version for the default entry named
+        `database_version`.
+        """
+        new_db_version = default_db_version + 1
+        self.dbm.set_database_version(new_db_version)
+        self.assertEqual(new_db_version, self.dbm.get_database_version())
+
+        # Restore the previous version to avoid destroying the database
+        # on teardown
+        self.dbm.set_database_version(default_db_version)
+        self.assertEqual(default_db_version, self.dbm.get_database_version())
+
+    def test_set_get_plugin_database_version(self):
+        """Get and set database version for an entry with an
+        arbitrary name.
+        """
+        name = 'a_trac_plugin_version'
+        db_ver = 1
+
+        self.assertFalse(self.dbm.get_database_version(name))
+        self.dbm.set_database_version(db_ver, name)
+        self.assertEqual(db_ver, self.dbm.get_database_version(name))
+
+
 def suite():
     suite = unittest.TestSuite()
     suite.addTest(unittest.makeSuite(ParseConnectionStringTestCase))
     suite.addTest(unittest.makeSuite(StringsTestCase))
     suite.addTest(unittest.makeSuite(ConnectionTestCase))
     suite.addTest(unittest.makeSuite(WithTransactionTest))
+    suite.addTest(unittest.makeSuite(DatabaseManagerTestCase))
     return suite
 
 

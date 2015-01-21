@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2003-2009 Edgewall Software
+# Copyright (C) 2003-2014 Edgewall Software
 # Copyright (C) 2003-2005 Jonas Borgström <jonas@edgewall.com>
 # Copyright (C) 2005 Christopher Lenz <cmlenz@gmx.de>
 # All rights reserved.
@@ -22,6 +22,7 @@ import doctest
 import inspect
 import os
 import sys
+import time
 import types
 import unittest
 
@@ -31,14 +32,13 @@ try:
 except ImportError:
     locale_en = None
 
-from trac.config import Configuration
-from trac.core import Component, ComponentManager
-from trac.env import Environment
-from trac.db.api import _parse_db_str, DatabaseManager
-from trac.db.sqlite_backend import SQLiteConnection
-from trac.db.util import ConnectionWrapper
-import trac.db.postgres_backend
 import trac.db.mysql_backend
+import trac.db.postgres_backend
+import trac.db.sqlite_backend
+from trac.config import Configuration
+from trac.core import ComponentManager
+from trac.db.api import DatabaseManager, parse_connection_uri
+from trac.env import Environment
 from trac.ticket.default_workflow import load_workflow_config_snippet
 from trac.util import translation
 
@@ -184,7 +184,7 @@ class TestCaseSetup(unittest.TestCase):
 def get_dburi():
     dburi = os.environ.get('TRAC_TEST_DB_URI')
     if dburi:
-        scheme, db_prop = _parse_db_str(dburi)
+        scheme, db_prop = parse_connection_uri(dburi)
         # Assume the schema 'tractest' for PostgreSQL
         if scheme == 'postgres' and \
                 not db_prop.get('params', {}).get('schema'):
@@ -197,67 +197,35 @@ def get_dburi():
 
 
 def reset_sqlite_db(env, db_prop):
-    with env.db_transaction as db:
-        tables = db.get_table_names()
-        for table in tables:
-            db("DELETE FROM %s" % table)
-        return tables
+    """Deletes all data from the tables.
+
+    :since 1.1.3: deprecated and will be removed in 1.3.1. Use `reset_tables`
+                  from the database connection class instead.
+    """
+    return DatabaseManager(env).reset_tables()
 
 
 def reset_postgres_db(env, db_prop):
-    with env.db_transaction as db:
-        dbname = db.schema
-        if dbname:
-            # reset sequences
-            # information_schema.sequences view is available in
-            # PostgreSQL 8.2+ however Trac supports PostgreSQL 8.0+, uses
-            # pg_get_serial_sequence()
-            seqs = [seq for seq, in db("""
-                SELECT sequence_name
-                FROM (
-                    SELECT pg_get_serial_sequence(
-                        quote_ident(table_schema) || '.' ||
-                        quote_ident(table_name), column_name) AS sequence_name
-                    FROM information_schema.columns
-                    WHERE table_schema=%s) AS tab
-                WHERE sequence_name IS NOT NULL""", (dbname,))]
-            for seq in seqs:
-                db("ALTER SEQUENCE %s RESTART WITH 1" % seq)
-            # clear tables
-            tables = db.get_table_names()
-            for table in tables:
-                db("DELETE FROM %s" % db.quote(table))
-            # PostgreSQL supports TRUNCATE TABLE as well
-            # (see http://www.postgresql.org/docs/8.1/static/sql-truncate.html)
-            # but on the small tables used here, DELETE is actually much faster
-            return tables
+    """Deletes all data from the tables and resets autoincrement indexes.
+
+    :since 1.1.3: deprecated and will be removed in 1.3.1. Use `reset_tables`
+                  from the database connection class instead.
+    """
+    return DatabaseManager(env).reset_tables()
 
 
 def reset_mysql_db(env, db_prop):
-    dbname = os.path.basename(db_prop['path'])
-    if dbname:
-        with env.db_transaction as db:
-            tables = db("""SELECT table_name, auto_increment
-                           FROM information_schema.tables
-                           WHERE table_schema=%s""", (dbname,))
-            for table, auto_increment in tables:
-                if auto_increment is None or auto_increment == 1:
-                    # DELETE FROM is preferred to TRUNCATE TABLE, as the
-                    # auto_increment is not used or it is 1.
-                    db("DELETE FROM %s" % table)
-                else:
-                    # TRUNCATE TABLE is preferred to DELETE FROM, as we
-                    # need to reset the auto_increment in MySQL.
-                    db("TRUNCATE TABLE %s" % table)
-            return tables
+    """Deletes all data from the tables and resets autoincrement indexes.
 
+    :since 1.1.3: deprecated and will be removed in 1.3.1. Use `reset_tables`
+                  from the database connection class instead.
+    """
+    return DatabaseManager(env).reset_tables()
 
-# -- Environment stub
 
 class EnvironmentStub(Environment):
     """A stub of the trac.env.Environment object for testing."""
 
-    href = abs_href = None
     global_databasemanager = None
     required = False
 
@@ -284,7 +252,6 @@ class EnvironmentStub(Environment):
             raise TypeError('Keyword argument "disable" must be a list')
 
         ComponentManager.__init__(self)
-        Component.__init__(self)
 
         self.systeminfo = []
 
@@ -330,18 +297,13 @@ class EnvironmentStub(Environment):
             self.config.set('trac', 'database', self.dburi)
             self.global_databasemanager = DatabaseManager(self)
             self.config.set('trac', 'debug_sql', True)
-            self.config.set('logging', 'log_type', 'stderr')
-            self.config.set('logging', 'log_level', 'DEBUG')
             init_global = not destroying
 
         if default_data or init_global:
             self.reset_db(default_data)
 
-        from trac.web.href import Href
-        self.href = Href('/trac.cgi')
-        self.abs_href = Href('http://example.org/trac.cgi')
+        self.config.set('trac', 'base_url', 'http://example.org/trac.cgi')
 
-        self.known_users = []
         translation.activate(locale_en)
 
     def reset_db(self, default_data=None):
@@ -350,14 +312,13 @@ class EnvironmentStub(Environment):
         :return: True upon success
         """
         from trac import db_default
-        scheme, db_prop = _parse_db_str(self.dburi)
+        scheme, db_prop = parse_connection_uri(self.dburi)
         tables = []
-        remove_sqlite_db = False
         try:
             with self.db_transaction as db:
                 db.rollback()  # make sure there's no transaction in progress
                 # check the database version
-                database_version = self.get_version()
+                database_version = self.database_version
         except Exception:
             # "Database not found ...",
             # "OperationalError: no such table: system" or the like
@@ -365,24 +326,10 @@ class EnvironmentStub(Environment):
         else:
             if database_version == db_default.db_version:
                 # same version, simply clear the tables (faster)
-                m = sys.modules[__name__]
-                reset_fn = 'reset_%s_db' % scheme
-                if hasattr(m, reset_fn):
-                    tables = getattr(m, reset_fn)(self, db_prop)
+                tables = self.global_databasemanager.reset_tables()
             else:
                 # different version or version unknown, drop the tables
-                remove_sqlite_db = True
                 self.destroy_db(scheme, db_prop)
-
-        db = None  # as we might shutdown the pool    FIXME no longer needed!
-
-        if scheme == 'sqlite' and remove_sqlite_db:
-            path = db_prop['path']
-            if path != ':memory:':
-                if not os.path.isabs(path):
-                    path = os.path.join(self.path, path)
-                self.global_databasemanager.shutdown()
-                os.remove(path)
 
         if not tables:
             self.global_databasemanager.init_db()
@@ -396,29 +343,44 @@ class EnvironmentStub(Environment):
                 # Speed-up tests with SQLite database
                 db("PRAGMA synchronous = OFF")
             if default_data:
-                for table, cols, vals in db_default.get_data(db):
-                    db.executemany("INSERT INTO %s (%s) VALUES (%s)"
-                                   % (table, ','.join(cols),
-                                      ','.join(['%s'] * len(cols))), vals)
+                self.global_databasemanager \
+                    .insert_into_tables(db_default.get_data)
             else:
-                db("INSERT INTO system (name, value) VALUES (%s, %s)",
-                   ('database_version', str(db_default.db_version)))
+                self.global_databasemanager \
+                    .set_database_version(db_default.db_version)
 
     def destroy_db(self, scheme=None, db_prop=None):
         if not (scheme and db_prop):
-            scheme, db_prop = _parse_db_str(self.dburi)
+            scheme, db_prop = parse_connection_uri(self.dburi)
         try:
             with self.db_transaction as db:
                 if scheme == 'postgres' and db.schema:
                     db('DROP SCHEMA %s CASCADE' % db.quote(db.schema))
                 elif scheme == 'mysql':
-                    for table in db.get_table_names():
-                        db("DROP TABLE IF EXISTS `%s`" % table)
+                    for table_name in db.get_table_names():
+                        db.drop_table(table_name)
+                elif scheme == 'sqlite':
+                    path = db_prop['path']
+                    if path != ':memory:':
+                        if not os.path.isabs(path):
+                            path = os.path.join(self.path, path)
+                        self.global_databasemanager.shutdown()
+                        os.remove(path)
         except Exception:
             # "TracError: Database not found...",
             # psycopg2.ProgrammingError: schema "tractest" does not exist
             pass
         return False
+
+    def insert_known_users(self, users):
+        with self.env.db_transaction as db:
+            for username, name, email in users:
+                db("INSERT INTO session VALUES (%s, %s, %s)",
+                   (username, 1, int(time.time())))
+                db("INSERT INTO session_attribute VALUES (%s,%s,'name',%s)",
+                   (username, 1, name))
+                db("INSERT INTO session_attribute VALUES (%s,%s,'email',%s)",
+                   (username, 1, email))
 
     # overridden
 
@@ -426,9 +388,6 @@ class EnvironmentStub(Environment):
         if self._component_name(cls).startswith('__main__.'):
             return True
         return Environment.is_component_enabled(self, cls)
-
-    def get_known_users(self, cnx=None):
-        return self.known_users
 
 
 def locate(fn):
@@ -460,7 +419,6 @@ def suite():
     import trac.versioncontrol.web_ui.tests
     import trac.web.tests
     import trac.wiki.tests
-    import tracopt.mimeview.tests
     import tracopt.perm.tests
     import tracopt.ticket.tests
     import tracopt.versioncontrol.git.tests
@@ -478,7 +436,6 @@ def suite():
     suite.addTest(trac.versioncontrol.web_ui.tests.suite())
     suite.addTest(trac.web.tests.suite())
     suite.addTest(trac.wiki.tests.suite())
-    suite.addTest(tracopt.mimeview.tests.suite())
     suite.addTest(tracopt.perm.tests.suite())
     suite.addTest(tracopt.ticket.tests.suite())
     suite.addTest(tracopt.versioncontrol.git.tests.suite())
@@ -486,11 +443,11 @@ def suite():
     suite.addTest(doctest.DocTestSuite(sys.modules[__name__]))
     if INCLUDE_FUNCTIONAL_TESTS:
         suite.addTest(trac.tests.functionalSuite())
-
     return suite
 
+
 if __name__ == '__main__':
-    #FIXME: this is a bit inelegant
+    # FIXME: this is a bit inelegant
     if '--skip-functional-tests' in sys.argv:
         sys.argv.remove('--skip-functional-tests')
         INCLUDE_FUNCTIONAL_TESTS = False

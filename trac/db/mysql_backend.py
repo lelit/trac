@@ -24,7 +24,7 @@ from genshi.core import Markup
 from trac.core import *
 from trac.config import Option
 from trac.db.api import ConnectionBase, DatabaseManager, IDatabaseConnector, \
-                        _parse_db_str, get_column_names
+                        get_column_names, parse_connection_uri
 from trac.db.util import ConnectionWrapper, IterableCursor
 from trac.env import IEnvironmentSetupParticipant, ISystemInfoProvider
 from trac.util import as_int, get_pkginfo
@@ -223,7 +223,7 @@ class MySQLConnector(Component):
     def backup(self, dest_file):
         from subprocess import Popen, PIPE
         db_url = self.env.config.get('trac', 'database')
-        scheme, db_prop = _parse_db_str(db_url)
+        scheme, db_prop = parse_connection_uri(db_url)
         db_params = db_prop.setdefault('params', {})
         db_name = os.path.basename(db_prop['path'])
 
@@ -441,6 +441,27 @@ class MySQLConnection(ConnectionBase, ConnectionWrapper):
 
     def like_escape(self, text):
         return _like_escape_re.sub(r'/\1', text)
+
+    def reset_tables(self):
+        table_names = []
+        if not self.schema:
+            return table_names
+        cursor = self.cursor()
+        cursor.execute("""
+            SELECT table_name, auto_increment
+            FROM information_schema.tables
+            WHERE table_schema=%s""", (self.schema,))
+        for table, auto_increment in cursor.fetchall():
+            table_names.append(table)
+            if auto_increment is None or auto_increment == 1:
+                # DELETE FROM is preferred to TRUNCATE TABLE, as the
+                # auto_increment is not used or it is 1.
+                cursor.execute("DELETE FROM %s" % table)
+            else:
+                # TRUNCATE TABLE is preferred to DELETE FROM, as we
+                # need to reset the auto_increment in MySQL.
+                cursor.execute("TRUNCATE TABLE %s" % table)
+        return table_names
 
     def prefix_match(self):
         return "LIKE %s ESCAPE '/'"

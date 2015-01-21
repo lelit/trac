@@ -64,9 +64,9 @@ class ITicketActionController(Interface):
 
     def get_ticket_actions(req, ticket):
         """Return an iterable of `(weight, action)` tuples corresponding to
-        the actions that are contributed by this component.
-        That list may vary given the current state of the ticket and the
-        actual request parameter.
+        the actions that are contributed by this component. The list is
+        dependent on the current state of the ticket and the actual request
+        parameter.
 
         `action` is a key used to identify that particular action.
         (note that 'history' and 'diff' are reserved and should not be used
@@ -76,7 +76,8 @@ class ITicketActionController(Interface):
         integer weight. The first action in the list is used as the default
         action.
 
-        When in doubt, use a weight of 0."""
+        When in doubt, use a weight of 0.
+        """
 
     def get_all_status():
         """Returns an iterable of all the possible values for the ''status''
@@ -196,6 +197,8 @@ class TicketSystem(Component):
     change_listeners = ExtensionPoint(ITicketChangeListener)
     milestone_change_listeners = ExtensionPoint(IMilestoneChangeListener)
 
+    realm = 'ticket'
+
     ticket_custom_section = ConfigSection('ticket-custom',
         """In this section, you can define additional fields for tickets. See
         TracTicketsCustomFields for more details.""")
@@ -204,7 +207,7 @@ class TicketSystem(Component):
         ITicketActionController, default='ConfigurableTicketWorkflow',
         include_missing=False,
         doc="""Ordered list of workflow controllers to use for ticket actions.
-            (''since 0.11'')""")
+            """)
 
     restrict_owner = BoolOption('ticket', 'restrict_owner', 'false',
         """Make the owner field of tickets use a drop-down menu.
@@ -215,13 +218,13 @@ class TicketSystem(Component):
         Please note that e-mail addresses are '''not''' obfuscated in the
         resulting drop-down menu, so this option should not be used if
         e-mail addresses must remain protected.
-        (''since 0.9'')""")
+        """)
 
     default_version = Option('ticket', 'default_version', '',
         """Default version for newly created tickets.""")
 
     default_type = Option('ticket', 'default_type', 'defect',
-        """Default type for newly created tickets. (''since 0.9'')""")
+        """Default type for newly created tickets.""")
 
     default_priority = Option('ticket', 'default_priority', 'major',
         """Default priority for newly created tickets.""")
@@ -251,8 +254,7 @@ class TicketSystem(Component):
         """Default cc: list for newly created tickets.""")
 
     default_resolution = Option('ticket', 'default_resolution', 'fixed',
-        """Default resolution for resolving (closing) tickets.
-        (''since 0.11'')""")
+        """Default resolution for resolving (closing) tickets.""")
 
     optional_fields = ListOption('ticket', 'optional_fields',
                                  'milestone, version', doc=
@@ -260,8 +262,8 @@ class TicketSystem(Component):
          an empty value. (//since 1.1.2//)""")
 
     def __init__(self):
-        self.log.debug('action controllers for ticket workflow: %r' %
-                [c.__class__.__name__ for c in self.action_controllers])
+        self.log.debug('action controllers for ticket workflow: %r',
+                       [c.__class__.__name__ for c in self.action_controllers])
 
     # Public API
 
@@ -328,9 +330,8 @@ class TicketSystem(Component):
 
         # Owner field, by default text but can be changed dynamically
         # into a drop-down depending on configuration (restrict_owner=true)
-        field = {'name': 'owner', 'label': N_('Owner')}
-        field['type'] = 'text'
-        fields.append(field)
+        fields.append({'name': 'owner', 'type': 'text',
+                       'label': N_('Owner')})
 
         # Description
         fields.append({'name': 'description', 'type': 'textarea',
@@ -409,7 +410,8 @@ class TicketSystem(Component):
                 'custom': True,
                 'type': config.get(name),
                 'order': config.getint(name + '.order', 0),
-                'label': config.get(name + '.label') or name.capitalize(),
+                'label': config.get(name + '.label') or
+                         name.replace("_", " ").strip().capitalize(),
                 'value': config.get(name + '.value', '')
             }
             if field['type'] == 'select' or field['type'] == 'radio':
@@ -444,17 +446,31 @@ class TicketSystem(Component):
         """
         if self.restrict_owner:
             field['type'] = 'select'
-            possible_owners = []
+            allowed_owners = self.get_allowed_owners(ticket)
+            allowed_owners.insert(0, '< default >')
+            field['options'] = allowed_owners
+            field['optional'] = 'owner' in self.optional_fields
+
+    def get_allowed_owners(self, ticket=None):
+        """Returns a list of permitted ticket owners (those possessing the
+        TICKET_MODIFY permission). Returns `None` if the option `[ticket]`
+        `restrict_owner` is `False`.
+
+        If `ticket` is not `None`, fine-grained permission checks are used
+        to determine the allowed owners for the specified resource.
+
+        :since: 1.0.3
+        """
+        if self.restrict_owner:
+            allowed_owners = []
             for user in PermissionSystem(self.env) \
-                    .get_users_with_permission('TICKET_MODIFY'):
+                        .get_users_with_permission('TICKET_MODIFY'):
                 if not ticket or \
                         'TICKET_MODIFY' in PermissionCache(self.env, user,
                                                            ticket.resource):
-                    possible_owners.append(user)
-            possible_owners.sort()
-            possible_owners.insert(0, '< default >')
-            field['options'] = possible_owners
-            field['optional'] = 'owner' in self.optional_fields
+                    allowed_owners.append(user)
+            allowed_owners.sort()
+            return allowed_owners
 
     # IPermissionRequestor methods
 
@@ -495,7 +511,7 @@ class TicketSystem(Component):
             r = Ranges(link)
             if len(r) == 1:
                 num = r.a
-                ticket = formatter.resource('ticket', num)
+                ticket = formatter.resource(self.realm, num)
                 from trac.ticket.model import Ticket
                 if Ticket.id_is_valid(num) and \
                         'TICKET_VIEW' in formatter.perm(ticket):
@@ -538,7 +554,7 @@ class TicketSystem(Component):
             resource = formatter.resource
             cnum = target
 
-        if resource and resource.id and resource.realm == 'ticket' and \
+        if resource and resource.id and resource.realm == self.realm and \
                 cnum and (all(c.isdigit() for c in cnum) or cnum == 'description'):
             href = title = class_ = None
             if self.resource_exists(resource):
@@ -575,7 +591,7 @@ class TicketSystem(Component):
     # IResourceManager methods
 
     def get_resource_realms(self):
-        yield 'ticket'
+        yield self.realm
 
     def get_resource_description(self, resource, format=None, context=None,
                                  **kwargs):

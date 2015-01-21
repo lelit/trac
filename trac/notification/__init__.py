@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2009-2013 Edgewall Software
+# Copyright (C)2014 Edgewall Software
 # All rights reserved.
 #
 # This software is licensed as described in the file COPYING, which
@@ -11,16 +11,8 @@
 # individuals. For the exact contribution history, see the revision
 # history and logs, available at http://trac.edgewall.org/log/.
 
-import unittest
-
-from tracopt.mimeview.tests import php
-
-
-def suite():
-    suite = unittest.TestSuite()
-    suite.addTest(php.suite())
-    return suite
-
-
-if __name__ == '__main__':
-    unittest.main(defaultTest='suite')
+# Imports for backward compatibility
+from trac.notification.api import IEmailSender, NotificationSystem
+from trac.notification.compat import Notify, NotifyEmail
+from trac.notification.mail import (EMAIL_LOOKALIKE_PATTERN, MAXHEADERLEN,
+                                    SmtpEmailSender, SendmailEmailSender)

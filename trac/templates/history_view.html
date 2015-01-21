@@ -19,6 +19,13 @@
   <head>
     <title>$title</title>
     <meta name="ROBOTS" content="NOINDEX, NOFOLLOW" />
+    <script type="text/javascript">/*<![CDATA[*/
+      jQuery(function ($) {
+        $("#fieldhist").on("mouseenter mouseleave", "tr", function() {
+          $(".inlinebuttons", $(this)).toggle();
+        });
+      });
+    /*]]>*/</script>
   </head>
 
   <body>
@@ -56,7 +63,11 @@
               <td class="author"
                   title="${_('IP-Address: %(ipnr)s', ipnr=item.ipnr)
                            if show_ip_addresses and item.ipnr else None}">${authorinfo(item.author)}</td>
-              <td class="comment">${wiki_to_oneliner(context.child(resource), item.comment, shorten=True)}</td>
+              <td class="comment">${wiki_to_oneliner(context.child(resource), item.comment, shorten=True)}
+                <span py:if="can_edit_comment" class="inlinebuttons">
+                  <a href="${url_of(resource, action='edit_comment', version=item.version)}">${captioned_button("✎", _("Edit"))}</a>
+                </span>
+              </td>
             </tr>
           </tbody>
         </table>

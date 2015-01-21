@@ -28,6 +28,7 @@ def debug(s):
     if _debug:
         sys.stderr.write(s)
 
+
 def readconfig(filename):
     """Returns a list of raw config options"""
     config = Configuration(filename)
@@ -39,22 +40,28 @@ def readconfig(filename):
         sys.exit(1)
     return rawactions
 
+
 class ColorScheme(object):
     # cyan, yellow are too light in color
-    colors = ['black', 'blue', 'red', 'green', 'purple', 'orange', 'darkgreen']
+    colors = ['black', 'blue', 'red', 'green', 'purple', 'orange',
+              'darkgreen']
+
     def __init__(self):
         self.mapping = {}
-        self.coloruse = [0,] * len(self.colors)
+        self.coloruse = [0] * len(self.colors)
+
     def get_color(self, name):
         try:
             colornum = self.mapping[name]
-        except(KeyError):
+        except KeyError:
             self.mapping[name] = colornum = self.pick_color(name)
         self.coloruse[colornum] += 1
         return self.colors[colornum]
+
     def pick_color(self, name):
         """Pick a color that has not been used much so far."""
         return self.coloruse.index(min(self.coloruse))
+
 
 def actions2graphviz(actions, show_ops=False, show_perms=False):
     """Returns a list of lines to be fed to graphviz."""
@@ -68,7 +75,7 @@ digraph G {
   { rank=sink; closed [ shape=trapezium ] }
     """]
     for action, attributes in actions.items():
-        label = [attributes['name'], ]
+        label = [attributes['label']]
         if show_ops:
             label += attributes['operations']
         if show_perms:
@@ -76,13 +83,14 @@ digraph G {
         if 'set_resolution' in attributes:
             label += ['(' + attributes['set_resolution'] + ')']
         for oldstate in attributes['oldstates']:
-            color = color_scheme.get_color(attributes['name'])
+            color = color_scheme.get_color(attributes['label'])
             digraph_lines.append(
-                '  "%s" -> "%s" [label="%s" color=%s fontcolor=%s]' % \
+                '  "%s" -> "%s" [label="%s" color=%s fontcolor=%s]' %
                 (oldstate, attributes['newstate'], '\\n'.join(label), color,
                  color))
     digraph_lines.append('}')
     return digraph_lines
+
 
 def main(filename, output, show_ops=False, show_perms=False):
     # Read in the config
@@ -95,14 +103,16 @@ def main(filename, output, show_ops=False, show_perms=False):
     digraph_lines = actions2graphviz(actions, show_ops, show_perms)
 
     # And output
-    output.write(unicode.encode('\n'.join(digraph_lines), locale.getpreferredencoding()))
+    output.write(unicode.encode('\n'.join(digraph_lines),
+                                locale.getpreferredencoding()))
+
 
 def usage(output):
     output.write('workflow_parser [options] configfile.ini [output.dot]\n'
                  '-h --help shows this message\n'
                  '-o --operations include operations in the graph\n'
-                 '-p --permissions include permissions in the graph\n'
-    )
+                 '-p --permissions include permissions in the graph\n')
+
 
 if __name__ == '__main__':
     show_ops = False

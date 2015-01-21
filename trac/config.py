@@ -14,7 +14,6 @@
 
 from ConfigParser import ConfigParser
 from copy import deepcopy
-from inspect import cleandoc
 import os.path
 import re
 
@@ -23,7 +22,7 @@ from trac.admin import AdminCommandError, IAdminCommandProvider
 from trac.core import *
 from trac.util import AtomicFile, as_bool
 from trac.util.compat import wait_for_file_mtime_change
-from trac.util.text import printout, to_unicode, CRLF
+from trac.util.text import CRLF, cleandoc, printout, to_unicode
 from trac.util.translation import _, N_, tag_
 
 __all__ = ['Configuration', 'ConfigSection', 'Option', 'BoolOption',
@@ -68,6 +67,9 @@ class Configuration(object):
         self._sections = {}
         self.parse_if_needed(force=True)
 
+    def __repr__(self):
+        return '<%s %r>' % (self.__class__.__name__, self.filename)
+
     def __contains__(self, name):
         """Return whether the configuration contains a section of the given
         name.
@@ -79,9 +81,6 @@ class Configuration(object):
         if name not in self._sections:
             self._sections[name] = Section(self, name)
         return self._sections[name]
-
-    def __repr__(self):
-        return '<%s %r>' % (self.__class__.__name__, self.filename)
 
     def get(self, section, key, default=''):
         """Return the value of the specified option.
@@ -271,7 +270,6 @@ class Configuration(object):
         changed = False
         modtime = os.path.getmtime(self.filename)
         if force or modtime > self._lastmtime:
-            self._sections = {}
             self.parser._sections = {}
             if not self.parser.read(self.filename):
                 raise TracError(_("Error reading '%(file)s', make sure it is "
@@ -294,7 +292,7 @@ class Configuration(object):
                 changed |= parent.parse_if_needed(force=force)
 
         if changed:
-            self._cache = {}
+            self._sections = {}
         return changed
 
     def touch(self):
@@ -333,6 +331,9 @@ class Section(object):
         self.overridden = {}
         self._cache = {}
 
+    def __repr__(self):
+        return '<%s [%s]>' % (self.__class__.__name__, self.name)
+
     def contains(self, key, defaults=True):
         if self.config.parser.has_option(_to_utf8(self.name), _to_utf8(key)):
             return True
@@ -368,9 +369,6 @@ class Section(object):
                     yield option
 
     __iter__ = iterate
-
-    def __repr__(self):
-        return '<%s [%s]>' % (self.__class__.__name__, self.name)
 
     def get(self, key, default=''):
         """Return the value of the specified option.
@@ -634,8 +632,8 @@ class Option(object):
         raise AttributeError(_("Setting attribute is not allowed."))
 
     def __repr__(self):
-        return '<%s [%s] "%s">' % (self.__class__.__name__, self.section,
-                                   self.name)
+        return '<%s [%s] %r>' % (self.__class__.__name__, self.section,
+                                 self.name)
 
     def dumps(self, value):
         """Return the value as a string to write to a trac.ini file"""
